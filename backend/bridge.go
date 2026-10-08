@@ -188,6 +188,7 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 				}
 			case "captcha_required":
 				b.onEvent("captcha_required", ev.Data)
+				go b.handleCaptchaRequest(ev.Data)
 			case "ready":
 				b.onEvent("log", "INFO", "[ЯДРО] Туннель готов к работе")
 			default:

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"embed"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,14 +49,14 @@ func startTray(ctx context.Context) {
 		}
 
 		systray.SetIcon(trayIcon)
-		systray.SetTooltip("PWDTT")
+		systray.SetTooltip("UWDT")
 		systray.SetOnClick(func(systray.IMenu) { wailsruntime.WindowShow(ctx) })
 		systray.SetOnDClick(func(systray.IMenu) { wailsruntime.WindowShow(ctx) })
 
-		show := systray.AddMenuItem("Show PWDTT", "Restore PWDTT")
+		show := systray.AddMenuItem("Открыть UWDT", "Показать окно UWDT")
 		show.Click(func() { wailsruntime.WindowShow(ctx) })
 		systray.AddSeparator()
-		exit := systray.AddMenuItem("Exit", "Exit PWDTT")
+		exit := systray.AddMenuItem("Выход", "Закрыть UWDT")
 		exit.Click(func() { wailsruntime.Quit(ctx) })
 
 		trayReady.Store(true)
@@ -97,12 +98,17 @@ func stopTray() {
 }
 
 func main() {
+	// Окно ручной капчи ВК — отдельный процесс, до single-instance lock и Wails
+	if len(os.Args) > 2 && os.Args[1] == "--captcha-window" {
+		backend.RunCaptchaWindowWindows(os.Args[2:])
+		return
+	}
 	backend.InitWintun(wintunDLL)
 	app := backend.NewApp()
 	secondInstanceLaunch := make(chan struct{}, 1)
 
 	err := wails.Run(&options.App{
-		Title:     "PWDTT",
+		Title:     "UWDT",
 		Width:     900,
 		Height:    600,
 		MinWidth:  800,
@@ -127,7 +133,7 @@ func main() {
 		},
 		Bind: []interface{}{app},
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: "pwdtt-windows-client",
+			UniqueId: "pwdtt-windows-client", // прежний id: старый PWDTT и UWDT не запустятся одновременно
 			OnSecondInstanceLaunch: func(options.SecondInstanceData) {
 				select {
 				case secondInstanceLaunch <- struct{}{}:

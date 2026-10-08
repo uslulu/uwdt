@@ -85,3 +85,7 @@ export function GetExcludes() {
 export function SetExcludes(arg1) {
   return window['go']['backend']['App']['SetExcludes'](arg1);
 }
+
+export function PingHost(arg1) {
+  return window['go']['backend']['App']['PingHost'](arg1);
+}

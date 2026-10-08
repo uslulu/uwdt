@@ -262,21 +262,6 @@ func (w *WG) refreshExcludesDarwin(logf wgLogFunc) {
 	logf(fmt.Sprintf("Исключения обновлены: +%d −%d", len(add), len(del)))
 }
 
-// excludeRefreshLoop периодически перерезолвит домены из списка исключений:
-// у сервисов адреса меняются, а маршрут привязан к адресу.
-func (w *WG) excludeRefreshLoop(stop chan struct{}, logf wgLogFunc) {
-	t := time.NewTicker(excludeRefreshInterval)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-			w.refreshExcludesDarwin(logf)
-		}
-	}
-}
-
 // routeGetDarwin — что macOS выберет для адреса: назначение, маска, шлюз, интерфейс.
 func routeGetDarwin(args ...string) (dst, mask, gw, iface string) {
 	out, err := exec.Command("route", append([]string{"-n", "get"}, args...)...).Output()

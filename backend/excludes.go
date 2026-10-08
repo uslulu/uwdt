@@ -177,3 +177,18 @@ func diffCIDRs(old, new []string) (add, del []string) {
 
 // Экспорт для тестов
 func DiffCIDRs(old, new []string) (add, del []string) { return diffCIDRs(old, new) }
+
+// excludeRefreshLoop периодически перерезолвит домены из списка исключений:
+// у сервисов адреса меняются, а маршрут привязан к адресу.
+func (w *WG) excludeRefreshLoop(stop chan struct{}, logf wgLogFunc) {
+	t := time.NewTicker(excludeRefreshInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			w.RefreshExcludes(logf)
+		}
+	}
+}

@@ -14,7 +14,7 @@ import { tunnelStore } from '../lib/stores/tunnelStore';
 import { toastStore } from '../lib/stores/toastStore';
 import { logStore } from '../lib/stores/logStore';
 import { wdttLinkStore } from '../lib/utils/wdttLink';
-import { SaveProfile } from '../../wailsjs/go/backend/App';
+import { SaveProfile, PingHost } from '../../wailsjs/go/backend/App';
 import type { Server, TunnelState } from '../lib/types';
 import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles } from '../../wailsjs/go/backend/App';
 import Bubble from '../components/Bubble';
@@ -78,10 +78,15 @@ const PING_COLORS: Record<string, string> = {
 };
 
 function pingColor(ping?: number) {
-  if (!ping) return PING_COLORS.none;
+  if (ping == null) return PING_COLORS.none;
+  if (ping < 0) return PING_COLORS.bad;
   if (ping < 100) return PING_COLORS.good;
   if (ping < 200) return PING_COLORS.mid;
   return PING_COLORS.bad;
+}
+
+function pingText(ping: number) {
+  return ping < 0 ? 'нет ответа' : `${ping} мс`;
 }
 
 const TUNNEL_LABEL: Record<TunnelState, string> = {
@@ -164,7 +169,7 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
               {s.ping != null && (
                 <span className="status-ping">
                   <span className="ping-dot" style={{ background: pingColor(s.ping) }} />
-                  {s.ping}
+                  {pingText(s.ping)}
                 </span>
               )}
               <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onEdit(s); }} aria-label="Редактировать">
@@ -181,7 +186,7 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
         {selected?.ping != null && (
           <span className="status-ping">
             <span className="ping-dot" style={{ background: pingColor(selected.ping) }} />
-            {selected.ping}
+            {pingText(selected.ping)}
           </span>
         )}
         <IconChevronUp
@@ -267,6 +272,22 @@ export default function Connect() {
   useEffect(() => tunnelStore.subscribe(setTunnelState), []);
   const [stats, setStats] = useState<TunnelStats | null>(null);
   useEffect(() => statsStore.subscribe(setStats), []);
+
+  // Пинг серверов: сразу и раз в минуту
+  const [pings, setPings] = useState<Record<string, number>>({});
+  const hostsKey = servers.map(s => s.id + '=' + s.host).join(',');
+  useEffect(() => {
+    let alive = true;
+    const run = () => {
+      serverStore.getAll().forEach(s => {
+        PingHost(s.host).then(ms => { if (alive) setPings(p => ({ ...p, [s.id]: ms })); }).catch(() => {});
+      });
+    };
+    run();
+    const t = setInterval(run, 60_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [hostsKey]);
+  const withPing = (s: Server): Server => (pings[s.id] != null ? { ...s, ping: pings[s.id] } : s);
 
   const selectedRef = useRef(selected);
   const tunnelStateRef = useRef(tunnelState);
@@ -461,8 +482,8 @@ export default function Connect() {
         </div>
 
         <ServerSelector
-          servers={servers}
-          selected={selected}
+          servers={servers.map(withPing)}
+          selected={selected ? withPing(selected) : null}
           listOpen={listOpen}
           onToggleList={() => setListOpen(o => !o)}
           onSelect={(s) => { setSelected({ ...s }); setListOpen(false); }}

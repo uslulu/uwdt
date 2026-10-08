@@ -280,9 +280,12 @@ func handleAuthError(streamID int) bool {
 
 var globalCaptchaLockout atomic.Int64
 
+// DesktopAutoWebView — умеет ли клиент решать капчу в невидимом WebView (только Android).
+var DesktopAutoWebView = false
+
 const (
 	captchaAutoWebViewTimeout     = 10 * time.Second
-	captchaManualWebViewTimeout   = 60 * time.Second
+	captchaManualWebViewTimeout   = 180 * time.Second // человеку нужно время
 	captchaSelectedWebViewTimeout = 120 * time.Second
 )
 
@@ -749,8 +752,17 @@ func requestWebViewCaptcha(streamID int, captchaErr *VkCaptchaError, mode string
 		timeout = captchaAutoWebViewTimeout
 	}
 
+	// «Автоматический» WebView есть только в Android-клиенте; десктоп сразу
+	// переходит к следующему шагу вместо пустого ожидания
+	if mode == "auto" && !DesktopAutoWebView {
+		return "", fmt.Errorf("auto webview недоступен на десктопе")
+	}
 	drainCaptchaResult()
 	fmt.Printf("CAPTCHA_SOLVE|%s|%s|%s\n", mode, captchaErr.RedirectURI, captchaErr.SessionToken)
+	// Десктоп: приложение открывает окно капчи по событию и возвращает токен через SolveCaptcha
+	if ac := getActiveCore(); ac != nil {
+		ac.emitCaptchaRequest(mode, captchaErr.RedirectURI, captchaErr.SessionToken)
+	}
 
 	waitCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

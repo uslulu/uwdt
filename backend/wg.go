@@ -90,7 +90,14 @@ func (w *WG) RefreshExcludes(logf wgLogFunc) {
 	if logf == nil {
 		logf = func(msg string) { log.Printf("[WG] %s", msg) }
 	}
-	w.refreshExcludesDarwin(logf)
+	switch runtime.GOOS {
+	case "darwin":
+		w.refreshExcludesDarwin(logf)
+	case "windows":
+		w.refreshExcludesWindows(logf)
+	default:
+		logf("Исключения сохранены — применятся при следующем подключении")
+	}
 }
 
 func (w *WG) Teardown() {
@@ -376,7 +383,11 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 			excludes = append(excludes, ip+"/32")
 		}
 		excludes = append(excludes, vkExcludeCIDRs...)
-		excludes = append(excludes, currentUserExcludes(logf)...)
+		user := currentUserExcludes(logf)
+		excludes = append(excludes, user...)
+		w.activeUserExcludes = user
+		w.refreshStop = make(chan struct{})
+		go w.excludeRefreshLoop(w.refreshStop, logf)
 		for _, cidr := range excludes {
 			ip, mask, err := parseCIDR(cidr)
 			if err != nil {
@@ -412,6 +423,12 @@ func (w *WG) teardownWindowsLocked() {
 		return
 	}
 
+	if w.refreshStop != nil {
+		close(w.refreshStop)
+		w.refreshStop = nil
+	}
+	w.activeUserExcludes = nil
+
 	// Restore physical gateway metric (must happen BEFORE closing WG device)
 	if w.physGW != "" {
 		_ = runCmdWindows("route", "change", "0.0.0.0", "mask", "0.0.0.0", w.physGW, "metric", "35")
@@ -444,6 +461,61 @@ func (w *WG) teardownWindowsLocked() {
 		w.activeTun.Close()
 		w.activeTun = nil
 	}
+}
+
+// refreshExcludesWindows применяет правку списка исключений к поднятому туннелю.
+// Приложение на Windows запущено с правами администратора — route работает напрямую.
+func (w *WG) refreshExcludesWindows(logf wgLogFunc) {
+	next := currentUserExcludes(logf)
+
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if w.activeDevice == nil || w.physGW == "" {
+		return
+	}
+	user := map[string]bool{}
+	for _, c := range w.activeUserExcludes {
+		user[c] = true
+	}
+	builtin := map[string]bool{}
+	for _, c := range w.activeExcludeRoutes {
+		if !user[c] {
+			builtin[c] = true
+		}
+	}
+	add, del := diffCIDRs(w.activeUserExcludes, next)
+	changed := 0
+	for _, c := range del {
+		if builtin[c] {
+			continue
+		}
+		if ip, mask, err := parseCIDR(c); err == nil {
+			_ = runCmdWindows("route", "delete", ip, "mask", mask)
+			changed++
+		}
+	}
+	for _, c := range add {
+		if builtin[c] {
+			continue
+		}
+		if ip, mask, err := parseCIDR(c); err == nil {
+			_ = runCmdWindows("route", "add", ip, "mask", mask, w.physGW)
+			changed++
+		}
+	}
+	if changed == 0 {
+		return
+	}
+	// Держим полный список актуальным — по нему снимаются маршруты при отключении
+	var kept []string
+	for _, c := range w.activeExcludeRoutes {
+		if builtin[c] {
+			kept = append(kept, c)
+		}
+	}
+	w.activeExcludeRoutes = append(kept, next...)
+	w.activeUserExcludes = next
+	logf(fmt.Sprintf("Исключения обновлены: +%d −%d", len(add), len(del)))
 }
 
 func extractWintun() error {

@@ -53,6 +53,9 @@ function useWailsEvents() {
       EventsOn('event', (name: unknown) => {
         if (name === 'wg_config') tunnelStore.set('connected');
       }),
+      EventsOn('captcha_window', (state: unknown) => {
+        if (state === 'open') toastStore.show('ВКонтакте просит капчу — решите её в открывшемся окне', 6000);
+      }),
       EventsOn('stats', (raw: unknown) => {
         statsStore.push((raw ?? {}) as { active?: number; bytes_up?: number; bytes_down?: number });
       }),

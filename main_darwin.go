@@ -24,6 +24,11 @@ func main() {
 		backend.RunWGHelperDarwin(os.Args[2:])
 		return
 	}
+	// Окно ручной капчи ВК — отдельный процесс со своим циклом событий
+	if len(os.Args) > 2 && os.Args[1] == "--captcha-window" {
+		backend.RunCaptchaWindowDarwin(os.Args[2:])
+		return
+	}
 
 	app := backend.NewApp()
 

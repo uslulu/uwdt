@@ -44,3 +44,5 @@ export function CheckExclude(arg1:string):Promise<string>;
 export function GetExcludes():Promise<Array<backend.ExcludeEntry>>;
 
 export function SetExcludes(arg1:Array<backend.ExcludeEntry>):Promise<Array<backend.ExcludeEntry>>;
+
+export function PingHost(arg1:string):Promise<number>;

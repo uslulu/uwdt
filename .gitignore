@@ -43,3 +43,4 @@ build/bin/
 build/backup/
 build/uwdt.iconset/
 .claude/
+build/windows/winres/
