@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { IconSearch, IconTrashX, IconCopy, IconCheck } from '@tabler/icons-react';
+import { IconSearch, IconTrashX, IconCopy, IconCheck, IconDeviceFloppy } from '@tabler/icons-react';
+import { SaveLogs } from '../../wailsjs/go/backend/App';
+import { toastStore } from '../lib/stores/toastStore';
 import { logStore, type LogEntry, type LogLevel } from '../lib/stores/logStore';
 import './Logs.css';
 
@@ -75,6 +77,11 @@ export default function Logs() {
                   <button type="button" key={f} className={`filter-btn${filter === f ? ' filter-btn--active' : ''}`} onClick={() => setFilter(f)}>{f}</button>
                 ))}
               </div>
+              <button type="button" className="icon-btn" onClick={() => {
+                SaveLogs().then(p => { if (p) toastStore.show('Лог сохранён: ' + p, 4000); }).catch(e => toastStore.show(String(e), 4000));
+              }} title="Сохранить полный лог в файл" aria-label="Сохранить лог">
+                <IconDeviceFloppy stroke={2} size={16} />
+              </button>
               <button type="button" className="icon-btn" onClick={logStore.clear} title="Очистить" aria-label="Очистить логи">
                 <IconTrashX stroke={2} size={16} />
               </button>

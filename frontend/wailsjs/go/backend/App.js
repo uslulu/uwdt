@@ -97,3 +97,7 @@ export function SetRussiaDirect(arg1) {
 export function InstallUpdate() {
   return window['go']['backend']['App']['InstallUpdate']();
 }
+
+export function SaveLogs() {
+  return window['go']['backend']['App']['SaveLogs']();
+}

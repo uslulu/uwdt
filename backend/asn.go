@@ -17,6 +17,14 @@ const asnMaxAge = 7 * 24 * time.Hour
 
 func asnCachePath(asn string) string { return filepath.Join(configDir(), "asn", asn+".txt") }
 
+// asnNetsCached — сети AS из кэша без обращения к сети (может быть пусто).
+func asnNetsCached(asn string) []string {
+	if data, err := os.ReadFile(asnCachePath(asn)); err == nil {
+		return parseNetList(string(data))
+	}
+	return nil
+}
+
 // asnNets — сети AS: свежий кэш или запрос к RIPEstat; при ошибке сети — старый кэш.
 func asnNets(asn string, logf wgLogFunc) []string {
 	path := asnCachePath(asn)
@@ -29,9 +37,7 @@ func asnNets(asn string, logf wgLogFunc) []string {
 	}
 	nets, err := fetchASNNets(asn)
 	if err != nil {
-		if logf != nil {
-			logf(fmt.Sprintf("Исключение %s: не удалось получить сети (%v)", asn, err))
-		}
+		logOnce(logf, "asn:"+asn, fmt.Sprintf("Исключение %s: не удалось получить сети (%v)", asn, err))
 		return cached
 	}
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)

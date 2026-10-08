@@ -215,7 +215,7 @@ func (w *WG) applyLinux(conf string, turnIPs []string, logf wgLogFunc) error {
 				routes = append(routes, ip+"/32")
 			}
 		}
-		for _, cidr := range append(append([]string{}, vkExcludeCIDRs...), currentUserExcludes(logf)...) {
+		for _, cidr := range append(append([]string{}, vkExcludeCIDRs...), currentUserExcludesFast(logf)...) {
 			if runCmdLinux("ip", "route", "add", cidr, "via", gw) == nil {
 				routes = append(routes, cidr)
 			}
@@ -383,7 +383,7 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 			excludes = append(excludes, ip+"/32")
 		}
 		excludes = append(excludes, vkExcludeCIDRs...)
-		user := currentUserExcludes(logf)
+		user := currentUserExcludesFast(logf) // без DNS: медленный DNS не должен держать туннель
 		excludes = append(excludes, user...)
 		w.activeUserExcludes = user
 		w.refreshStop = make(chan struct{})
@@ -409,9 +409,7 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 	w.activeRoutes = tunnelRoutes
 
 	logf(fmt.Sprintf("Туннель %s поднят, AllowedIPs: %v", wgIface, tunnelRoutes))
-	if russiaDirectEnabled() {
-		go w.RefreshExcludes(logf) // ~9 тыс. сетей — пачкой через API, после подъёма туннеля
-	}
+	go w.RefreshExcludes(logf) // свежие домены, AS и «Россия» — пачкой через API, после подъёма туннеля
 	return nil
 }
 

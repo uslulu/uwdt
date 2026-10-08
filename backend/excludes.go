@@ -7,9 +7,12 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -104,10 +107,12 @@ func ValidateExcludes(entries []ExcludeEntry) ([]ExcludeEntry, error) {
 }
 
 // resolveExcludes превращает включённые записи в список CIDR.
-// Домены резолвятся в IPv4 /32; домен, который не резолвится, пропускается
-// с записью в лог — остальные исключения от этого не страдают.
-func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc) []string {
+// fast=true — без сети: домены и AS берутся из кэша (для подключения, чтобы
+// медленный DNS не задерживал туннель); fast=false — свежий запрос, домены
+// параллельно и с запасными DNS-серверами.
+func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc, fast bool) []string {
 	set := map[string]bool{}
+	var domains []string
 	for _, e := range entries {
 		if !e.Enabled {
 			continue
@@ -116,29 +121,26 @@ func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc) []string {
 		if err != nil {
 			continue
 		}
-		if kind == "cidr" {
+		switch kind {
+		case "cidr":
 			set[v] = true
-			continue
-		}
-		if kind == "asn" {
-			for _, c := range asnNets(v, logf) {
+		case "asn":
+			var nets []string
+			if fast {
+				nets = asnNetsCached(v)
+			} else {
+				nets = asnNets(v, logf)
+			}
+			for _, c := range nets {
 				set[c] = true
 			}
-			continue
+		case "domain":
+			domains = append(domains, v)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		addrs, err := net.DefaultResolver.LookupIPAddr(ctx, v)
-		cancel()
-		if err != nil {
-			if logf != nil {
-				logf(fmt.Sprintf("Исключение %s: не удалось получить адрес (%v)", v, err))
-			}
-			continue
-		}
-		for _, a := range addrs {
-			if ip4 := a.IP.To4(); ip4 != nil {
-				set[ip4.String()+"/32"] = true
-			}
+	}
+	for _, ips := range resolveDomains(domains, logf, fast) {
+		for _, ip := range ips {
+			set[ip+"/32"] = true
 		}
 	}
 	out := make([]string, 0, len(set))
@@ -146,6 +148,145 @@ func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc) []string {
 		out = append(out, c)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// ── домены: кэш последних адресов + параллельный резолв с запасными DNS ──
+
+var (
+	dnsCacheMu     sync.Mutex
+	dnsCache       map[string][]string // домен → последние известные IPv4
+	dnsCacheLoaded bool
+	logOnceMu      sync.Mutex
+	logOnceSeen    = map[string]time.Time{}
+)
+
+// Запасные DNS: оба уже идут мимо туннеля (77.88/18 и 1.1.1/24 во встроенных исключениях)
+var fallbackDNS = []string{"77.88.8.8:53", "1.1.1.1:53"}
+
+func dnsCachePath() string { return filepath.Join(configDir(), "dns_cache.json") }
+
+func loadDNSCacheLocked() {
+	if dnsCacheLoaded {
+		return
+	}
+	dnsCacheLoaded = true
+	dnsCache = map[string][]string{}
+	if data, err := os.ReadFile(dnsCachePath()); err == nil {
+		_ = json.Unmarshal(data, &dnsCache)
+	}
+}
+
+// logOnce пишет сообщение не чаще раза в полчаса для одного ключа.
+func logOnce(logf wgLogFunc, key, msg string) {
+	if logf == nil {
+		return
+	}
+	logOnceMu.Lock()
+	last, seen := logOnceSeen[key]
+	if seen && time.Since(last) < 30*time.Minute {
+		logOnceMu.Unlock()
+		return
+	}
+	logOnceSeen[key] = time.Now()
+	logOnceMu.Unlock()
+	logf(msg)
+}
+
+func lookupIPv4(ctx context.Context, r *net.Resolver, host string) []string {
+	addrs, err := r.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range addrs {
+		if ip4 := a.IP.To4(); ip4 != nil {
+			out = append(out, ip4.String())
+		}
+	}
+	return out
+}
+
+// lookupDomain: системный DNS (у Cisco бывает медленным), затем запасные серверы напрямую.
+func lookupDomain(host string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	ips := lookupIPv4(ctx, net.DefaultResolver, host)
+	cancel()
+	if len(ips) > 0 {
+		return ips
+	}
+	for _, ns := range fallbackDNS {
+		ns := ns
+		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 2 * time.Second}
+			return d.DialContext(ctx, "udp", ns)
+		}}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ips = lookupIPv4(ctx, r, host)
+		cancel()
+		if len(ips) > 0 {
+			return ips
+		}
+	}
+	return nil
+}
+
+func resolveDomains(domains []string, logf wgLogFunc, fast bool) map[string][]string {
+	out := map[string][]string{}
+	if len(domains) == 0 {
+		return out
+	}
+	dnsCacheMu.Lock()
+	loadDNSCacheLocked()
+	cached := map[string][]string{}
+	for _, d := range domains {
+		cached[d] = dnsCache[d]
+	}
+	dnsCacheMu.Unlock()
+	if fast {
+		for d, ips := range cached {
+			if len(ips) > 0 {
+				out[d] = ips
+			}
+		}
+		return out
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, d := range domains {
+		wg.Add(1)
+		go func(d string) {
+			defer wg.Done()
+			ips := lookupDomain(d)
+			mu.Lock()
+			defer mu.Unlock()
+			if len(ips) == 0 {
+				if old := cached[d]; len(old) > 0 {
+					out[d] = old // DNS молчит — держим прошлые адреса
+				}
+				logOnce(logf, "dns:"+d, fmt.Sprintf("Исключение %s: DNS не ответил, использую прошлые адреса (%d)", d, len(cached[d])))
+				return
+			}
+			out[d] = ips
+		}(d)
+	}
+	wg.Wait()
+
+	dnsCacheMu.Lock()
+	changed := false
+	for d, ips := range out {
+		if strings.Join(dnsCache[d], ",") != strings.Join(ips, ",") {
+			dnsCache[d] = ips
+			changed = true
+		}
+	}
+	if changed {
+		if data, err := json.Marshal(dnsCache); err == nil {
+			_ = atomicWrite(dnsCachePath(), data)
+		}
+	}
+	dnsCacheMu.Unlock()
 	return out
 }
 
@@ -161,14 +302,19 @@ func SetExcludeSource(f func() []ExcludeEntry) {
 	excludeSourceMu.Unlock()
 }
 
-func currentUserExcludes(logf wgLogFunc) []string {
+func currentUserExcludes(logf wgLogFunc) []string { return userExcludes(logf, false) }
+
+// currentUserExcludesFast — без сети, из кэша: для момента подключения.
+func currentUserExcludesFast(logf wgLogFunc) []string { return userExcludes(logf, true) }
+
+func userExcludes(logf wgLogFunc, fast bool) []string {
 	excludeSourceMu.Lock()
 	f := excludeSource
 	excludeSourceMu.Unlock()
 	if f == nil {
 		return nil
 	}
-	return resolveExcludes(f(), logf)
+	return resolveExcludes(f(), logf, fast)
 }
 
 // «Россия напрямую» — флаг из настроек (задаётся App при старте)

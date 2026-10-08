@@ -50,3 +50,5 @@ export function GetRussiaDirect():Promise<backend.RussiaInfo>;
 export function SetRussiaDirect(arg1:boolean):Promise<backend.RussiaInfo>;
 
 export function InstallUpdate():Promise<void>;
+
+export function SaveLogs():Promise<string>;

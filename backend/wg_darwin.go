@@ -77,7 +77,7 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 		}
 		excludes = append(excludes, dns+"/32")
 	}
-	userExcludes := currentUserExcludes(logf)
+	userExcludes := currentUserExcludesFast(logf) // без DNS: медленный DNS не должен держать туннель
 	if len(userExcludes) > 0 {
 		logf(fmt.Sprintf("Пользовательских исключений: %d", len(userExcludes)))
 	}
@@ -178,9 +178,8 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 	w.stateMu.Unlock()
 
 	logf(fmt.Sprintf("Туннель %s поднят, маршруты: %v", utunName, tunnels))
-	if russiaDirectEnabled() {
-		go w.RefreshExcludes(logf) // ~9 тыс. сетей — уже через helper, не через командную строку
-	}
+	// Свежие адреса доменов, сети AS и «Россия» — в фоне, через helper
+	go w.RefreshExcludes(logf)
 	return nil
 }
 
