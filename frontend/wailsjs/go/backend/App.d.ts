@@ -45,8 +45,8 @@ export function GetExcludes():Promise<Array<backend.ExcludeEntry>>;
 
 export function SetExcludes(arg1:Array<backend.ExcludeEntry>):Promise<Array<backend.ExcludeEntry>>;
 
-export function PingHost(arg1:string):Promise<number>;
-
 export function GetRussiaDirect():Promise<backend.RussiaInfo>;
 
 export function SetRussiaDirect(arg1:boolean):Promise<backend.RussiaInfo>;
+
+export function InstallUpdate():Promise<void>;

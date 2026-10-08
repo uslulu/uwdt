@@ -33,8 +33,6 @@
 .status-server { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border-2); border-radius: 14px; box-shadow: 0 4px 20px rgba(20,60,110,0.06); padding: 11px 18px; transition: border-color 0.15s; font-size: 15px; color: var(--text); cursor: pointer; width: 100%; font-family: 'Geist', sans-serif; font-weight: 500; }
 .status-server--empty { color: var(--text-4); }
 .status-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-ping { display: flex; align-items: center; gap: 6px; font-size: 14px; flex: 0 0 auto; }
-.ping-dot { width: 8px; height: 8px; border-radius: 50%; }
 .icon-picker { position: fixed; z-index: 200; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px; box-shadow: var(--shadow); display: grid; grid-template-columns: repeat(6, 36px); gap: 4px; animation: modal-in 0.15s ease-out; }
 .icon-picker-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; color: var(--text); font-size: 18px; }
 .icon-picker-btn:hover { background: var(--bg-3); border-color: var(--border); }

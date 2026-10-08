@@ -64,18 +64,21 @@ function useWailsEvents() {
   }, []);
 }
 
-// Интервал повторной проверки: 5 минут
+// Повтор при ошибке сети — через 5 минут, плановая проверка — раз в 6 часов
 const RETRY_MS = 5 * 60 * 1000;
+const PERIODIC_MS = 6 * 60 * 60 * 1000;
 
 function useUpdateChecker() {
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; url: string } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; url: string; page: string } | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const check = () => {
       CheckUpdate().then(info => {
         if (info.available) {
-          setUpdateInfo({ version: info.version, body: info.body, url: info.url });
+          setUpdateInfo({ version: info.version, body: info.body, url: info.url, page: info.page });
+        } else {
+          timerRef.current = setTimeout(check, PERIODIC_MS);
         }
       }).catch(() => {
         timerRef.current = setTimeout(check, RETRY_MS);
@@ -107,6 +110,7 @@ export default function App() {
           version={updateInfo.version}
           body={updateInfo.body}
           url={updateInfo.url}
+          page={updateInfo.page}
           onClose={closeUpdate}
         />
       )}

@@ -6,7 +6,7 @@ import (
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const Version = "1.6.0-excl"
+const Version = "1.6.1"
 
 // App — главный объект приложения.
 // Wails привязывает его методы к frontend через Bind().
@@ -39,6 +39,8 @@ func (a *App) Startup(ctx context.Context) {
 	if settings.AutoStart {
 		a.SetAutoStart(true)
 	}
+
+	go cleanupOldUpdate()
 
 	// Уборка маршрутов, оставшихся от краша прошлого запуска
 	go CleanupStaleExcludeRoutes(func(msg string) {

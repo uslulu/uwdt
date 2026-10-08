@@ -14,7 +14,7 @@ import { tunnelStore } from '../lib/stores/tunnelStore';
 import { toastStore } from '../lib/stores/toastStore';
 import { logStore } from '../lib/stores/logStore';
 import { wdttLinkStore } from '../lib/utils/wdttLink';
-import { SaveProfile, PingHost } from '../../wailsjs/go/backend/App';
+import { SaveProfile } from '../../wailsjs/go/backend/App';
 import type { Server, TunnelState } from '../lib/types';
 import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles } from '../../wailsjs/go/backend/App';
 import Bubble from '../components/Bubble';
@@ -68,25 +68,6 @@ const SERVER_ICONS: { key: string; render: (size: number) => React.ReactNode }[]
 function ServerIcon({ iconKey, size }: { iconKey?: string; size: number }) {
   const entry = SERVER_ICONS.find(i => i.key === (iconKey ?? 'clover')) ?? SERVER_ICONS[0];
   return <>{entry.render(size)}</>;
-}
-
-const PING_COLORS: Record<string, string> = {
-  good: '#22c55e',
-  mid: '#f59e0b',
-  bad: '#ef4444',
-  none: 'var(--border)',
-};
-
-function pingColor(ping?: number) {
-  if (ping == null) return PING_COLORS.none;
-  if (ping < 0) return PING_COLORS.bad;
-  if (ping < 100) return PING_COLORS.good;
-  if (ping < 200) return PING_COLORS.mid;
-  return PING_COLORS.bad;
-}
-
-function pingText(ping: number) {
-  return ping < 0 ? 'нет ответа' : `${ping} мс`;
 }
 
 const TUNNEL_LABEL: Record<TunnelState, string> = {
@@ -166,12 +147,6 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
               <span className="status-name">
                 {s.name}
               </span>
-              {s.ping != null && (
-                <span className="status-ping">
-                  <span className="ping-dot" style={{ background: pingColor(s.ping) }} />
-                  {pingText(s.ping)}
-                </span>
-              )}
               <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onEdit(s); }} aria-label="Редактировать">
                 <IconPencil size={15} stroke={2} />
               </button>
@@ -183,12 +158,6 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
       <button type="button" className={`status-server${!selected ? ' status-server--empty' : ''}`} onClick={onToggleList}>
         <ServerIcon iconKey={selected?.icon} size={20} />
         <span className="status-name">{selected ? selected.name : 'Нет серверов'}</span>
-        {selected?.ping != null && (
-          <span className="status-ping">
-            <span className="ping-dot" style={{ background: pingColor(selected.ping) }} />
-            {pingText(selected.ping)}
-          </span>
-        )}
         <IconChevronUp
           size={16}
           style={{ transform: listOpen ? 'rotate(0deg)' : 'rotate(180deg)', transition: 'transform 0.2s' }}
@@ -273,21 +242,6 @@ export default function Connect() {
   const [stats, setStats] = useState<TunnelStats | null>(null);
   useEffect(() => statsStore.subscribe(setStats), []);
 
-  // Пинг серверов: сразу и раз в минуту
-  const [pings, setPings] = useState<Record<string, number>>({});
-  const hostsKey = servers.map(s => s.id + '=' + s.host).join(',');
-  useEffect(() => {
-    let alive = true;
-    const run = () => {
-      serverStore.getAll().forEach(s => {
-        PingHost(s.host).then(ms => { if (alive) setPings(p => ({ ...p, [s.id]: ms })); }).catch(() => {});
-      });
-    };
-    run();
-    const t = setInterval(run, 60_000);
-    return () => { alive = false; clearInterval(t); };
-  }, [hostsKey]);
-  const withPing = (s: Server): Server => (pings[s.id] != null ? { ...s, ping: pings[s.id] } : s);
 
   const selectedRef = useRef(selected);
   const tunnelStateRef = useRef(tunnelState);
@@ -482,8 +436,8 @@ export default function Connect() {
         </div>
 
         <ServerSelector
-          servers={servers.map(withPing)}
-          selected={selected ? withPing(selected) : null}
+          servers={servers}
+          selected={selected}
           listOpen={listOpen}
           onToggleList={() => setListOpen(o => !o)}
           onSelect={(s) => { setSelected({ ...s }); setListOpen(false); }}

@@ -1,16 +1,36 @@
-import { IconX, IconDownload, IconRocket } from '@tabler/icons-react';
-import { BrowserOpenURL } from '../../wailsjs/runtime/runtime';
+import { useEffect, useState } from 'react';
+import { IconX, IconDownload, IconRocket, IconExternalLink } from '@tabler/icons-react';
+import { BrowserOpenURL, EventsOn } from '../../wailsjs/runtime/runtime';
+import { InstallUpdate } from '../../wailsjs/go/backend/App';
 import { renderMarkdown } from '../lib/utils/markdown';
 
 interface Props {
   version: string;
   body: string;
   url: string;
+  page: string;
   onClose: () => void;
 }
 
-export default function UpdateModal({ version, body, url, onClose }: Props) {
+export default function UpdateModal({ version, body, url, page, onClose }: Props) {
   const sanitizedHtml = renderMarkdown(body);
+  const [busy, setBusy] = useState(false);
+  const [pct, setPct] = useState(0);
+  const [error, setError] = useState('');
+
+  useEffect(() => EventsOn('update_progress', (p: unknown) => setPct(Number(p) || 0)), []);
+
+  const install = async () => {
+    setBusy(true);
+    setError('');
+    setPct(0);
+    try {
+      await InstallUpdate(); // при успехе приложение перезапускается само
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  };
 
   return (
     <>
@@ -38,10 +58,15 @@ export default function UpdateModal({ version, body, url, onClose }: Props) {
         .upd-btn--primary:hover { opacity: 0.9; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
         .upd-btn--secondary { background: transparent; color: var(--text-3); border: 1px solid var(--border); }
         .upd-btn--secondary:hover { border-color: var(--text-3); color: var(--text); }
+        .upd-btn:disabled { opacity: 0.6; cursor: default; }
+        .upd-progress { height: 4px; border-radius: 4px; background: var(--bg-3); overflow: hidden; margin-bottom: 14px; }
+        .upd-progress > div { height: 100%; background: var(--accent); transition: width 0.2s; }
+        .upd-error { font-size: 12px; color: #ef4444; margin-bottom: 12px; line-height: 1.45; }
+        .upd-note { font-size: 11px; color: var(--text-3); margin: -6px 0 14px; }
       `}</style>
-      <div className="upd-overlay" onClick={onClose}>
+      <div className="upd-overlay" onClick={busy ? undefined : onClose}>
         <div className="upd-modal" onClick={e => e.stopPropagation()}>
-          <button type="button" className="upd-close" onClick={onClose} aria-label="Закрыть"><IconX size={18} /></button>
+          <button type="button" className="upd-close" onClick={onClose} aria-label="Закрыть" disabled={busy}><IconX size={18} /></button>
 
           <div className="upd-header">
             <div className="upd-icon"><IconRocket size={20} /></div>
@@ -53,13 +78,24 @@ export default function UpdateModal({ version, body, url, onClose }: Props) {
 
           {body && <div className="upd-body" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />}
 
+          {busy && <div className="upd-progress"><div style={{ width: `${pct}%` }} /></div>}
+          {error && <div className="upd-error">{error}</div>}
+          {!busy && !error && <div className="upd-note">Туннель прервётся на несколько секунд — приложение перезапустится само.</div>}
+
           <div className="upd-actions">
-            <button type="button" className="upd-btn upd-btn--secondary" onClick={onClose}>
-              Позже
-            </button>
-            <button type="button" className="upd-btn upd-btn--primary" onClick={() => { BrowserOpenURL(url || 'https://github.com/luminescq/PWDTT/releases'); onClose(); }}>
+            {error || !url ? (
+              <button type="button" className="upd-btn upd-btn--secondary" onClick={() => BrowserOpenURL(page || url)}>
+                <IconExternalLink size={16} />
+                Страница релиза
+              </button>
+            ) : (
+              <button type="button" className="upd-btn upd-btn--secondary" onClick={onClose} disabled={busy}>
+                Позже
+              </button>
+            )}
+            <button type="button" className="upd-btn upd-btn--primary" onClick={install} disabled={busy || !url}>
               <IconDownload size={16} />
-              Скачать
+              {busy ? (pct < 100 ? `Скачиваю… ${pct}%` : 'Устанавливаю…') : 'Обновить'}
             </button>
           </div>
         </div>

@@ -109,6 +109,7 @@ export namespace backend {
 	    version: string;
 	    url: string;
 	    body: string;
+	    page: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
@@ -120,6 +121,7 @@ export namespace backend {
 	        this.version = source["version"];
 	        this.url = source["url"];
 	        this.body = source["body"];
+	        this.page = source["page"];
 	    }
 	}
 
