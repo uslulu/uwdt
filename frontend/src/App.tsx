@@ -12,6 +12,7 @@ import { tunnelStore } from './lib/stores/tunnelStore';
 import type { LogLevel } from './lib/stores/logStore';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { statsStore } from './lib/stores/statsStore';
+import { stageStore } from './lib/stores/stageStore';
 import { CheckUpdate } from '../wailsjs/go/backend/App';
 
 function useWdttPaste() {
@@ -46,12 +47,15 @@ function useWailsEvents() {
       }),
       EventsOn('state_changed', (status: unknown) => {
         const s = String(status ?? '');
-        if (s === 'connected' || s === 'running') { tunnelStore.set('connected'); logStore.push('INFO', '✓ Туннель активен'); }
-        else if (s === 'connecting') { tunnelStore.set('connecting'); statsStore.reset(); logStore.clear(); logStore.push('INFO', '⟳ Подключение...'); }
-        else if (s === 'stopped' || s === 'error' || s === 'disconnected') { tunnelStore.set('idle'); statsStore.reset(); logStore.push('INFO', '— Отключено'); }
+        if (s === 'connected' || s === 'running') { tunnelStore.set('connected'); stageStore.set(''); logStore.push('INFO', '✓ Туннель активен'); }
+        else if (s === 'connecting') { tunnelStore.set('connecting'); statsStore.reset(); stageStore.set('Запускаю подключение…'); logStore.clear(); logStore.push('INFO', '⟳ Подключение...'); }
+        else if (s === 'stopped' || s === 'error' || s === 'disconnected') { tunnelStore.set('idle'); statsStore.reset(); stageStore.set(''); logStore.push('INFO', '— Отключено'); }
       }),
       EventsOn('event', (name: unknown) => {
         if (name === 'wg_config') tunnelStore.set('connected');
+      }),
+      EventsOn('stage', (text: unknown) => {
+        if (tunnelStore.get() === 'connecting') stageStore.set(String(text ?? ''));
       }),
       EventsOn('captcha_window', (state: unknown) => {
         if (state === 'open') toastStore.show('ВКонтакте просит капчу — решите её в открывшемся окне', 6000);

@@ -78,6 +78,7 @@ func (b *Bridge) handleCaptchaRequest(data string) {
 	defer captchaWindowMu.Unlock()
 
 	b.onEvent("captcha_window", "open")
+	b.onEvent("stage", "Решите капчу в открывшемся окне")
 	b.onEvent("log", "INFO", "[КАПЧА] ВКонтакте просит пройти проверку — решите капчу в открывшемся окне")
 	token, err := runCaptchaWindow(req.RedirectURI)
 	b.onEvent("captcha_window", "closed")

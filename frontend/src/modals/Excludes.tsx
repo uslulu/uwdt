@@ -10,7 +10,13 @@ interface Props {
   onClose: () => void;
 }
 
-const isDomain = (v: string) => !/^[\d./]+$/.test(v);
+const kindLabel = (v: string) =>
+  /^AS\d+$/.test(v) ? 'компания' : /^[\d./]+$/.test(v) ? (v.endsWith('/32') ? 'адрес' : 'сеть') : 'домен';
+
+// Готовые наборы: сервис → его автономная система (все сети компании)
+const PRESETS = [
+  { label: 'Steam / Dota 2', value: 'AS32590' },
+];
 
 export default function Excludes({ onClose }: Props) {
   const [items, setItems] = useState<ExcludeEntry[]>([]);
@@ -100,7 +106,7 @@ export default function Excludes({ onClose }: Props) {
         </div>
 
         <div className="ex-hint">
-          Эти адреса идут напрямую, мимо туннеля. Подсеть, адрес или домен — изменения применяются сразу.
+          Эти адреса идут напрямую, мимо туннеля. Подсеть, адрес, домен или номер сети компании (AS) — изменения применяются сразу.
         </div>
 
         <div className={`ex-russia${ru?.enabled ? ' ex-russia--on' : ''}`}>
@@ -125,7 +131,7 @@ export default function Excludes({ onClose }: Props) {
             className={`ex-input${error ? ' ex-input--error' : ''}`}
             value={input}
             onChange={e => onInput(e.target.value)}
-            placeholder="10.0.0.0/8 или meet.example.ru"
+            placeholder="10.0.0.0/8, example.ru или AS32590"
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
@@ -136,11 +142,29 @@ export default function Excludes({ onClose }: Props) {
         </form>
         <div className="ex-error">{error}</div>
 
+        <div className="ex-presets">
+          {PRESETS.map(p => {
+            const added = items.some(i => i.value === p.value);
+            return (
+              <button
+                key={p.value}
+                type="button"
+                className={`ex-preset${added ? ' ex-preset--added' : ''}`}
+                disabled={added || saving}
+                onClick={() => persist([...items, { value: p.value, enabled: true }])}
+                title={`Все сети ${p.value}`}
+              >
+                {added ? '✓ ' : '+ '}{p.label}
+              </button>
+            );
+          })}
+        </div>
+
         <div className="ex-list">
           {items.length === 0 && <div className="ex-empty">Список пуст — весь трафик идёт через туннель</div>}
           {items.map((it, idx) => (
             <div key={it.value} className={`ex-item${it.enabled ? '' : ' ex-item--off'}`}>
-              <span className="ex-kind">{isDomain(it.value) ? 'домен' : it.value.endsWith('/32') ? 'адрес' : 'сеть'}</span>
+              <span className="ex-kind">{kindLabel(it.value)}</span>
               <span className="ex-value" title={it.value}>{it.value.endsWith('/32') ? it.value.slice(0, -3) : it.value}</span>
               <button
                 type="button"

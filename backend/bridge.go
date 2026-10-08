@@ -18,6 +18,7 @@ type Bridge struct {
 	core    *core.Core
 	running bool
 	logFile *LogFile // полный лог сессии
+	stage   stageTracker
 	session uint64   // номер сессии; stale forwardEvents не должен трогать новую
 }
 
@@ -36,6 +37,7 @@ func (b *Bridge) Connect(params ConnectParams) error {
 	// Сразу помечаем как running чтобы заблокировать параллельные вызовы
 	b.running = true
 	b.session++
+	b.stage = stageTracker{}
 	sessID := b.session
 	b.mu.Unlock()
 
@@ -152,7 +154,11 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 			if b.logFile != nil {
 				b.logFile.Write(ev.Level, ev.Message)
 			}
+			stage, moved := b.stage.feed(ev.Message)
 			b.mu.Unlock()
+			if moved {
+				b.onEvent("stage", stage)
+			}
 			// В UI — только отфильтрованное
 			if ev.Level != "SKIP" {
 				b.onEvent("log", ev.Level, ev.Message)
@@ -178,7 +184,11 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 					if b.logFile != nil {
 						b.logFile.Write("INFO", "[WG] "+msg)
 					}
+					stage, moved := b.stage.feed(msg)
 					b.mu.Unlock()
+					if moved {
+						b.onEvent("stage", stage)
+					}
 				}
 				if err := wg.Apply(ev.Data, ev.TurnIPs, wgLogf); err != nil {
 					b.onEvent("error", fmt.Sprintf("[WG] Ошибка: %v", err))

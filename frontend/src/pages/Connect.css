@@ -41,3 +41,4 @@
 
 .status-server:hover { border-color: var(--accent); }
 .server-icon-btn { color: var(--accent); }
+.hero-stage { display: inline-block; color: var(--accent); animation: slide-down 0.25s ease-out; }

@@ -12,7 +12,7 @@
 .ex-item { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--border-2); }
 .ex-item:last-child { border-bottom: none; }
 .ex-item--off .ex-value, .ex-item--off .ex-kind { opacity: 0.45; }
-.ex-kind { flex-shrink: 0; width: 48px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent); }
+.ex-kind { flex-shrink: 0; width: 62px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent); }
 .ex-value { flex: 1; min-width: 0; font-size: 13px; font-family: 'Geist Mono', 'SF Mono', monospace; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ex-toggle { transform: scale(0.8); }
 .ex-del { flex-shrink: 0; display: flex; padding: 4px; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 6px; transition: color 0.15s, background 0.15s; }
@@ -26,3 +26,7 @@
 .ex-russia-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ex-russia-title { font-size: 14px; font-weight: 600; color: var(--text); }
 .ex-russia-sub { font-size: 11px; color: var(--text-3); line-height: 1.35; }
+.ex-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.ex-preset { padding: 5px 10px; border: 1px dashed var(--border); border-radius: 999px; background: none; color: var(--text-2); font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 600; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+.ex-preset:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.ex-preset--added { border-style: solid; color: var(--text-3); cursor: default; }

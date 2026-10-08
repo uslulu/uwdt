@@ -18,6 +18,8 @@ func TestNormalizeExclude(t *testing.T) {
 		{"https://meet.example.ru/room/123?x=1", "domain", "meet.example.ru"},
 		{"meet.example.ru/room", "domain", "meet.example.ru"},
 		{"xn--80ak6aa92e.com", "domain", "xn--80ak6aa92e.com"},
+		{"AS32590", "asn", "AS32590"},
+		{"as 32590", "asn", "AS32590"},
 	}
 	for _, c := range ok {
 		kind, v, err := backend.NormalizeExclude(c.in)
@@ -25,7 +27,7 @@ func TestNormalizeExclude(t *testing.T) {
 			t.Errorf("%q → (%q, %q, %v), want (%q, %q)", c.in, kind, v, err, c.kind, c.out)
 		}
 	}
-	bad := []string{"", "  ", "0.0.0.0/0", "10.0.0.0/4", "300.1.1.1", "::1", "2001:db8::/32", "localhost", "meet example.ru", "a;rm -rf /"}
+	bad := []string{"", "  ", "0.0.0.0/0", "10.0.0.0/4", "300.1.1.1", "::1", "2001:db8::/32", "localhost", "meet example.ru", "a;rm -rf /", "AS0", "AS99999999999"}
 	for _, in := range bad {
 		if _, v, err := backend.NormalizeExclude(in); err == nil {
 			t.Errorf("%q должно быть ошибкой, получили %q", in, v)

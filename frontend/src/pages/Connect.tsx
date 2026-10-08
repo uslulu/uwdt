@@ -19,6 +19,7 @@ import type { Server, TunnelState } from '../lib/types';
 import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles } from '../../wailsjs/go/backend/App';
 import Bubble from '../components/Bubble';
 import { statsStore, formatRate, type TunnelStats } from '../lib/stores/statsStore';
+import { stageStore } from '../lib/stores/stageStore';
 import { IconArrowDown, IconArrowUp, IconPlugConnected } from '@tabler/icons-react';
 import './Connect.css';
 
@@ -241,6 +242,8 @@ export default function Connect() {
   useEffect(() => tunnelStore.subscribe(setTunnelState), []);
   const [stats, setStats] = useState<TunnelStats | null>(null);
   useEffect(() => statsStore.subscribe(setStats), []);
+  const [stage, setStage] = useState('');
+  useEffect(() => stageStore.subscribe(setStage), []);
 
 
   const selectedRef = useRef(selected);
@@ -428,7 +431,10 @@ export default function Connect() {
           />
           <div className="hero-title">{selected ? STATUS_TITLE[tunnelState] : 'Нет серверов'}</div>
           <div className="hero-sub">
-            {!selected ? 'Добавьте сервер кнопкой «+»' : tunnelState === 'idle' ? 'Нажмите на пузырь, чтобы подключиться' : selected.name}
+            {!selected ? 'Добавьте сервер кнопкой «+»'
+              : tunnelState === 'idle' ? 'Нажмите на пузырь, чтобы подключиться'
+              : tunnelState === 'connecting' && stage ? <span key={stage} className="hero-stage">{stage}</span>
+              : selected.name}
           </div>
           <div className={`hero-stats${tunnelState === 'connected' ? ' hero-stats--on' : ''}`}>
             <StatsCard stats={stats} />

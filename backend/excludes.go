@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,13 +28,23 @@ const excludeRefreshInterval = 10 * time.Minute
 
 var domainRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
+// Номер автономной системы — все сети компании (AS32590 — Valve: Steam, Dota 2)
+var asnRe = regexp.MustCompile(`^as\s*([0-9]{1,10})$`)
+
 // NormalizeExclude приводит ввод пользователя к канонической форме.
-// Принимает IPv4, CIDR, домен, а также вставленный URL (берётся хост).
-// kind: "cidr" или "domain".
+// Принимает IPv4, CIDR, домен, номер AS, а также вставленный URL (берётся хост).
+// kind: "cidr", "domain" или "asn".
 func NormalizeExclude(raw string) (kind, value string, err error) {
 	v := strings.TrimSpace(strings.ToLower(raw))
 	if v == "" {
 		return "", "", fmt.Errorf("пустая строка")
+	}
+	if m := asnRe.FindStringSubmatch(v); m != nil {
+		n, err := strconv.ParseUint(m[1], 10, 32)
+		if err != nil || n == 0 {
+			return "", "", fmt.Errorf("неверный номер AS: %s", raw)
+		}
+		return "asn", fmt.Sprintf("AS%d", n), nil
 	}
 	if strings.Contains(v, "://") {
 		if u, perr := url.Parse(v); perr == nil && u.Hostname() != "" {
@@ -107,6 +118,12 @@ func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc) []string {
 		}
 		if kind == "cidr" {
 			set[v] = true
+			continue
+		}
+		if kind == "asn" {
+			for _, c := range asnNets(v, logf) {
+				set[c] = true
+			}
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
