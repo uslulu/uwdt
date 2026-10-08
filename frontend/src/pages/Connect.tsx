@@ -11,16 +11,15 @@ import AddServer from '../modals/Add-server';
 import EditServer from '../modals/Edit-server';
 import { serverStore, settingsStore } from '../lib/store';
 import { tunnelStore } from '../lib/stores/tunnelStore';
-import { themeStore } from '../lib/stores/themeStore';
 import { toastStore } from '../lib/stores/toastStore';
 import { logStore } from '../lib/stores/logStore';
 import { wdttLinkStore } from '../lib/utils/wdttLink';
 import { SaveProfile } from '../../wailsjs/go/backend/App';
 import type { Server, TunnelState } from '../lib/types';
 import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles } from '../../wailsjs/go/backend/App';
-import shapeLight from '../assets/shape-light.png';
-import shapeDark from '../assets/shape-dark.png';
-import powerIcon from '../assets/power-icon.png';
+import Bubble from '../components/Bubble';
+import { statsStore, formatRate, type TunnelStats } from '../lib/stores/statsStore';
+import { IconArrowDown, IconArrowUp, IconPlugConnected } from '@tabler/icons-react';
 import './Connect.css';
 
 const SERVER_ICONS: { key: string; render: (size: number) => React.ReactNode }[] = [
@@ -92,26 +91,48 @@ const TUNNEL_LABEL: Record<TunnelState, string> = {
   disconnecting: 'Отключение...',
 };
 
-function PowerButton({ theme, tunnelState, isActive, isSpinning, linkFlash, selected, onTunnel }: {
-  theme: string; tunnelState: TunnelState; isActive: boolean; isSpinning: boolean;
-  linkFlash: boolean; selected: Server | null; onTunnel: () => void;
+const STATUS_TITLE: Record<TunnelState, string> = {
+  idle: 'Не подключено',
+  connecting: 'Подключение…',
+  connected: 'Подключено',
+  disconnecting: 'Отключение…',
+};
+
+function PowerButton({ tunnelState, linkFlash, selected, onTunnel }: {
+  tunnelState: TunnelState; linkFlash: boolean; selected: Server | null; onTunnel: () => void;
 }) {
   return (
     <button
       type="button"
-      className="power-btn"
+      className={`power-btn${linkFlash ? ' power-btn--flash' : ''}`}
       onClick={onTunnel}
       disabled={!selected}
       title={selected ? TUNNEL_LABEL[tunnelState] : 'Добавьте сервер'}
       aria-label={selected ? TUNNEL_LABEL[tunnelState] : 'Добавьте сервер'}
     >
-      <div className={`orb${isSpinning ? ' orb--spinning' : isActive ? ' orb--active' : ''}${linkFlash ? ' orb--flash' : ''}`}>
-        <img src={theme === 'dark' ? shapeLight : shapeDark} alt="" draggable={false} />
-      </div>
-      <div className="power-icon">
-        <img src={powerIcon} alt="" draggable={false} style={{ width: 28, height: 35 }} />
-      </div>
+      <Bubble state={tunnelState} />
     </button>
+  );
+}
+
+function StatsCard({ stats }: { stats: TunnelStats | null }) {
+  const down = formatRate(stats?.downBps ?? 0);
+  const up = formatRate(stats?.upBps ?? 0);
+  return (
+    <div className="stats-card">
+      <div className="stat">
+        <span className="stat-label"><IconArrowDown size={14} stroke={2.4} />Скачивание</span>
+        <span className="stat-value">{down.value} <small>{down.unit}</small></span>
+      </div>
+      <div className="stat">
+        <span className="stat-label"><IconArrowUp size={14} stroke={2.4} />Отдача</span>
+        <span className="stat-value">{up.value} <small>{up.unit}</small></span>
+      </div>
+      <div className="stat">
+        <span className="stat-label"><IconPlugConnected size={14} stroke={2.2} />Каналы</span>
+        <span className="stat-value">{stats?.active ?? '—'}</span>
+      </div>
+    </div>
   );
 }
 
@@ -244,8 +265,8 @@ export default function Connect() {
   // tunnelState из глобального store — переживает смену роута
   const [tunnelState, setTunnelState] = useState<TunnelState>(() => tunnelStore.get());
   useEffect(() => tunnelStore.subscribe(setTunnelState), []);
-  const [theme, setTheme] = useState(() => themeStore.get());
-  useEffect(() => themeStore.subscribe(setTheme), []);
+  const [stats, setStats] = useState<TunnelStats | null>(null);
+  useEffect(() => statsStore.subscribe(setStats), []);
 
   const selectedRef = useRef(selected);
   const tunnelStateRef = useRef(tunnelState);
@@ -416,9 +437,6 @@ export default function Connect() {
     setIconMenu(null);
   };
 
-  const isActive = tunnelState === 'connected';
-  const isSpinning = tunnelState === 'connecting';
-
   return (
     <>
       <main className="main">
@@ -426,17 +444,21 @@ export default function Connect() {
           <IconPlus stroke={2} size={22} />
         </button>
 
-        <PowerButton
-          theme={theme}
-          tunnelState={tunnelState}
-          isActive={isActive}
-          isSpinning={isSpinning}
-          linkFlash={linkFlash}
-          selected={selected}
-          onTunnel={handleTunnel}
-        />
-
-        <span className="tunnel-label">{selected ? TUNNEL_LABEL[tunnelState] : 'Нет серверов'}</span>
+        <div className="hero">
+          <PowerButton
+            tunnelState={tunnelState}
+            linkFlash={linkFlash}
+            selected={selected}
+            onTunnel={handleTunnel}
+          />
+          <div className="hero-title">{selected ? STATUS_TITLE[tunnelState] : 'Нет серверов'}</div>
+          <div className="hero-sub">
+            {!selected ? 'Добавьте сервер кнопкой «+»' : tunnelState === 'idle' ? 'Нажмите на пузырь, чтобы подключиться' : selected.name}
+          </div>
+          <div className={`hero-stats${tunnelState === 'connected' ? ' hero-stats--on' : ''}`}>
+            <StatsCard stats={stats} />
+          </div>
+        </div>
 
         <ServerSelector
           servers={servers}

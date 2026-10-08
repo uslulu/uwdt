@@ -11,6 +11,7 @@ import { logStore } from './lib/stores/logStore';
 import { tunnelStore } from './lib/stores/tunnelStore';
 import type { LogLevel } from './lib/stores/logStore';
 import { EventsOn } from '../wailsjs/runtime/runtime';
+import { statsStore } from './lib/stores/statsStore';
 import { CheckUpdate } from '../wailsjs/go/backend/App';
 
 function useWdttPaste() {
@@ -46,11 +47,14 @@ function useWailsEvents() {
       EventsOn('state_changed', (status: unknown) => {
         const s = String(status ?? '');
         if (s === 'connected' || s === 'running') { tunnelStore.set('connected'); logStore.push('INFO', '✓ Туннель активен'); }
-        else if (s === 'connecting') { tunnelStore.set('connecting'); logStore.clear(); logStore.push('INFO', '⟳ Подключение...'); }
-        else if (s === 'stopped' || s === 'error' || s === 'disconnected') { tunnelStore.set('idle'); logStore.push('INFO', '— Отключено'); }
+        else if (s === 'connecting') { tunnelStore.set('connecting'); statsStore.reset(); logStore.clear(); logStore.push('INFO', '⟳ Подключение...'); }
+        else if (s === 'stopped' || s === 'error' || s === 'disconnected') { tunnelStore.set('idle'); statsStore.reset(); logStore.push('INFO', '— Отключено'); }
       }),
       EventsOn('event', (name: unknown) => {
         if (name === 'wg_config') tunnelStore.set('connected');
+      }),
+      EventsOn('stats', (raw: unknown) => {
+        statsStore.push((raw ?? {}) as { active?: number; bytes_up?: number; bytes_down?: number });
       }),
     ];
     return () => offs.forEach(off => off());

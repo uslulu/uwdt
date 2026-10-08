@@ -8,7 +8,7 @@ export default function Layout() {
   const { pathname } = useLocation();
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: 'var(--surface)', boxSizing: 'border-box' }}>
+    <div style={{ display: 'flex', height: '100vh', background: 'var(--bg)', boxSizing: 'border-box' }}>
       <Sidebar
         onSettings={() => setSettingsOpen(true)}
         pathname={pathname}

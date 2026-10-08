@@ -39,3 +39,7 @@ desktop.ini
 
 # Logs
 *.log
+build/bin/
+build/backup/
+build/uwdt.iconset/
+.claude/

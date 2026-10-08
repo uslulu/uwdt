@@ -130,7 +130,7 @@ export default function Settings({ onClose }: Props) {
           </div>
 
           <div className="st-info">
-            <div className="st-info-name">PWDTT</div>
+            <div className="st-info-name">UWDT</div>
             <div className="st-info-ver">v{version}</div>
           </div>
 

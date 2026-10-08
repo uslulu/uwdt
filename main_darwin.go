@@ -28,7 +28,7 @@ func main() {
 	app := backend.NewApp()
 
 	err := wails.Run(&options.App{
-		Title:     "PWDTT",
+		Title:     "UWDT",
 		Width:     900,
 		Height:    600,
 		MinWidth:  800,
@@ -51,8 +51,8 @@ func main() {
 				HideToolbarSeparator:       false,
 			},
 			About: &mac.AboutInfo{
-				Title:   "PWDTT",
-				Message: "© 2026 PWDTT",
+				Title:   "UWDT",
+				Message: "Сборка на основе PWDTT (luminescq) с исключениями из туннеля",
 			},
 		},
 	})
