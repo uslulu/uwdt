@@ -2,21 +2,36 @@
   <img src="assets/icons/icon.png" width="96" />
 </p>
 
-<h1 align="center">PWDTT</h1>
+<h1 align="center">UWDT</h1>
 
 <p align="center">
-  Десктопный VPN-клиент, который туннелирует трафик через TURN-серверы VK,<br>
-  маскируя соединение под зашифрованный медиатрафик звонка.<br>
-  <sub>Форк <a href="https://github.com/amurcanov/proxy-turn-vk-android">proxy-turn-vk-android</a> — версия для ПК</sub>
+  Десктопный VPN-клиент для macOS и Windows: трафик идёт через TURN-серверы VK<br>
+  и выглядит как зашифрованный медиатрафик звонка.<br>
+  <sub>Сборка на основе <a href="https://github.com/luminescq/PWDTT">PWDTT</a> (luminescq), GPL-3.0</sub>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/Wails-v2-red?style=for-the-badge&logo=wails&logoColor=white" alt="Wails">
-  <img src="https://img.shields.io/badge/Linux-amd64-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
   <img src="https://img.shields.io/badge/Windows-amd64-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
-  <img src="https://img.shields.io/badge/macOS-Universal-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS">
+  <img src="https://img.shields.io/badge/macOS-arm64-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS">
 </p>
+
+## Чем UWDT отличается от PWDTT
+
+- **Исключения из туннеля.** В настройках — список подсетей, адресов и доменов, которые идут напрямую, мимо туннеля. Изменения применяются сразу, без переподключения.
+- **«Россия напрямую».** Одним переключателем все российские IP-сети (по реестру RIPE, ~8,6 тыс. сетей) идут мимо туннеля. Список вшит и обновляется раз в неделю.
+- **Совместимость с корпоративным VPN.** Маршрут Cisco к его серверу и маршруты, которые другой VPN ведёт через свой интерфейс, не перехватываются; DNS, обслуживаемый другим VPN, не уводится мимо него.
+- **Ручная капча.** Если ВК просит проверку, открывается окно со страницей капчи; после решения подключение продолжается.
+- **Пинг серверов** в списке, **скорость туннеля** (скачивание, отдача, каналы) на главном экране.
+- **Новый интерфейс:** минималистичный, «пузырь» вместо кнопки, светлая и тёмная тема.
+
+## Установка
+
+- **macOS (Apple Silicon):** скачайте `UWDT-macos.zip` из [релизов](../../releases), распакуйте и перенесите `UWDT.app` в «Программы». Сборка подписана локально — при первом запуске откройте через правый клик → «Открыть».
+- **Windows 10/11 (x64):** скачайте `UWDT-windows.zip`, распакуйте и запустите `UWDT.exe` (попросит права администратора — без них туннель не поднять).
+
+Сервер — тот же `wdtt-server`, что и для PWDTT.
 
 ---
 
