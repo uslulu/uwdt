@@ -44,3 +44,22 @@ export function formatRate(bps: number): { value: string; unit: string } {
   if (bps >= 1e3) return { value: (bps / 1e3).toFixed(0), unit: 'Кбит/с' };
   return { value: bps > 0 ? '<1' : '0', unit: 'Кбит/с' };
 }
+
+// Время активного подключения: отсчёт с момента, когда туннель поднялся.
+let connectedAt: number | null = null;
+
+export const sessionClock = {
+  start: () => { if (connectedAt == null) connectedAt = Date.now(); },
+  stop: () => { connectedAt = null; },
+  since: () => connectedAt,
+};
+
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}

@@ -18,9 +18,9 @@ import { SaveProfile } from '../../wailsjs/go/backend/App';
 import type { Server, TunnelState } from '../lib/types';
 import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles } from '../../wailsjs/go/backend/App';
 import Bubble from '../components/Bubble';
-import { statsStore, formatRate, type TunnelStats } from '../lib/stores/statsStore';
+import { statsStore, formatRate, formatDuration, sessionClock, type TunnelStats } from '../lib/stores/statsStore';
 import { stageStore } from '../lib/stores/stageStore';
-import { IconArrowDown, IconArrowUp, IconPlugConnected } from '@tabler/icons-react';
+import { IconArrowDown, IconArrowUp, IconPlugConnected, IconClock } from '@tabler/icons-react';
 import './Connect.css';
 
 const SERVER_ICONS: { key: string; render: (size: number) => React.ReactNode }[] = [
@@ -102,11 +102,28 @@ function PowerButton({ tunnelState, linkFlash, selected, onTunnel }: {
   );
 }
 
-function StatsCard({ stats }: { stats: TunnelStats | null }) {
+// Часы подключения обновляются раз в секунду, пока карточка на экране
+function useSessionDuration(active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  const since = sessionClock.since();
+  return active && since != null ? formatDuration(now - since) : '0:00';
+}
+
+function StatsCard({ stats, active }: { stats: TunnelStats | null; active: boolean }) {
   const down = formatRate(stats?.downBps ?? 0);
   const up = formatRate(stats?.upBps ?? 0);
+  const duration = useSessionDuration(active);
   return (
     <div className="stats-card">
+      <div className="stat">
+        <span className="stat-label"><IconClock size={14} stroke={2.2} />В сети</span>
+        <span className="stat-value">{duration}</span>
+      </div>
       <div className="stat">
         <span className="stat-label"><IconArrowDown size={14} stroke={2.4} />Скачивание</span>
         <span className="stat-value">{down.value} <small>{down.unit}</small></span>
@@ -437,7 +454,7 @@ export default function Connect() {
               : selected.name}
           </div>
           <div className={`hero-stats${tunnelState === 'connected' ? ' hero-stats--on' : ''}`}>
-            <StatsCard stats={stats} />
+            <StatsCard stats={stats} active={tunnelState === 'connected'} />
           </div>
         </div>
 
