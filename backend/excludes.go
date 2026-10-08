@@ -231,6 +231,21 @@ func lookupDomain(host string) []string {
 	return nil
 }
 
+// mergeIPs — свежие адреса первыми, затем прежние, без повторов, не больше max.
+func mergeIPs(fresh, old []string, max int) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range [][]string{fresh, old} {
+		for _, ip := range l {
+			if !seen[ip] && len(out) < max {
+				seen[ip] = true
+				out = append(out, ip)
+			}
+		}
+	}
+	return out
+}
+
 func resolveDomains(domains []string, logf wgLogFunc, fast bool) map[string][]string {
 	out := map[string][]string{}
 	if len(domains) == 0 {
@@ -268,7 +283,9 @@ func resolveDomains(domains []string, logf wgLogFunc, fast bool) map[string][]st
 				logOnce(logf, "dns:"+d, fmt.Sprintf("Исключение %s: DNS не ответил, использую прошлые адреса (%d)", d, len(cached[d])))
 				return
 			}
-			out[d] = ips
+			// Копим адреса: у крупных сервисов они чередуются, и замена набора
+			// каждые 10 минут дёргала бы таблицу маршрутов (Cisco на это реагирует)
+			out[d] = mergeIPs(ips, cached[d], 16)
 		}(d)
 	}
 	wg.Wait()
@@ -337,8 +354,13 @@ func russiaDirectEnabled() bool {
 }
 
 // currentAllExcludes — пользовательский список плюс российские сети, если включено.
-func currentAllExcludes(logf wgLogFunc) []string {
-	list := currentUserExcludes(logf)
+func currentAllExcludes(logf wgLogFunc) []string { return allExcludes(logf, false) }
+
+// currentAllExcludesFast — то же без обращения к сети (кэш): для момента подключения.
+func currentAllExcludesFast(logf wgLogFunc) []string { return allExcludes(logf, true) }
+
+func allExcludes(logf wgLogFunc, fast bool) []string {
+	list := userExcludes(logf, fast)
 	if !russiaDirectEnabled() {
 		return list
 	}

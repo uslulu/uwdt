@@ -77,11 +77,12 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 		}
 		excludes = append(excludes, dns+"/32")
 	}
-	userExcludes := currentUserExcludesFast(logf) // без DNS: медленный DNS не должен держать туннель
+	// Пользовательские исключения и «Россия» — из кэша, без DNS; ставятся helper'ом
+	// одним пакетом ДО туннельных маршрутов, чтобы их трафик ни на миг не ушёл в туннель
+	userExcludes := currentAllExcludesFast(logf)
 	if len(userExcludes) > 0 {
-		logf(fmt.Sprintf("Пользовательских исключений: %d", len(userExcludes)))
+		logf(fmt.Sprintf("Исключений из туннеля: %d", len(userExcludes)))
 	}
-	excludes = append(excludes, userExcludes...)
 
 	// Туннельные маршруты: полный дефолт заменяем на split-default,
 	// чтобы не трогать физический default route
@@ -101,6 +102,10 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 	}
 	defer os.RemoveAll(sockDir)
 	sock := filepath.Join(sockDir, "h.sock")
+	exclFile := filepath.Join(sockDir, "exclude.txt")
+	if err := os.WriteFile(exclFile, []byte(strings.Join(userExcludes, "\n")), 0o644); err != nil {
+		return err
+	}
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 	if err != nil {
 		return err
@@ -112,9 +117,9 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 		return err
 	}
 
-	shellCmd := fmt.Sprintf("%s --wg-helper -sock %s -addr %s -mtu %d -exclude %s -tunnel %s >/dev/null 2>&1 &",
+	shellCmd := fmt.Sprintf("%s --wg-helper -sock %s -addr %s -mtu %d -exclude %s -exclude-file %s -tunnel %s >/dev/null 2>&1 &",
 		shellQuote(exe), shellQuote(sock), shellQuote(addr), mtu,
-		shellQuote(strings.Join(excludes, ",")), shellQuote(strings.Join(tunnels, ",")))
+		shellQuote(strings.Join(excludes, ",")), shellQuote(exclFile), shellQuote(strings.Join(tunnels, ",")))
 	osa := fmt.Sprintf("do shell script %q with administrator privileges", shellCmd)
 
 	logf("Запрос прав администратора для настройки туннеля…")
@@ -351,6 +356,29 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// physicalGatewayDarwin — шлюз default route, только если он на физическом
+// интерфейсе (en*, bridge*); если default сейчас ведёт в чужой туннель — "".
+func physicalGatewayDarwin() string {
+	out, err := exec.Command("route", "-n", "get", "default").Output()
+	if err != nil {
+		return ""
+	}
+	var gw, iface string
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && f[0] == "gateway:" {
+			gw = f[1]
+		}
+		if len(f) == 2 && f[0] == "interface:" {
+			iface = f[1]
+		}
+	}
+	if net.ParseIP(gw) == nil || !(strings.HasPrefix(iface, "en") || strings.HasPrefix(iface, "bridge")) {
+		return ""
+	}
+	return gw
+}
+
 func defaultGatewayDarwin() string {
 	out, err := exec.Command("route", "-n", "get", "default").Output()
 	if err != nil {
@@ -450,6 +478,7 @@ func RunWGHelperDarwin(args []string) {
 	mtu := fs.Int("mtu", 1300, "MTU")
 	excludes := fs.String("exclude", "", "exclude CIDR через запятую (мимо туннеля)")
 	tunnels := fs.String("tunnel", "", "туннельные CIDR через запятую")
+	exclFile := fs.String("exclude-file", "", "файл с исключениями пользователя (CIDR построчно)")
 	fs.Parse(args)
 
 	raddr, err := net.ResolveUnixAddr("unix", *sockPath)
@@ -500,7 +529,7 @@ func RunWGHelperDarwin(args []string) {
 	_ = runCmdDarwin("ifconfig", name, "up")
 	send(wgHelperMsg{Log: fmt.Sprintf("IP установлен: %s", *addr)}, -1)
 
-	gw := defaultGatewayDarwin()
+	gw := physicalGatewayDarwin()
 	send(wgHelperMsg{Log: fmt.Sprintf("Default gateway: %s", gw)}, -1)
 
 	// Exclude-маршруты через физический gateway — ДО туннельных,
@@ -533,6 +562,19 @@ func RunWGHelperDarwin(args []string) {
 		g.ours[c] = true
 	}
 	g.learnForeignHostRoutes(gw)
+
+	if *exclFile != "" && gw != "" {
+		if data, err := os.ReadFile(*exclFile); err == nil {
+			n := 0
+			for _, line := range strings.Split(string(data), "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					g.apply("add", line)
+					n++
+				}
+			}
+			send(wgHelperMsg{Log: fmt.Sprintf("Исключений до подъёма туннеля: %d", n)}, -1)
+		}
+	}
 
 	for _, cidr := range splitCSV(*tunnels) {
 		if err := runCmdDarwin("route", "-q", "-n", "add", "-net", cidr, "-interface", name); err != nil {
@@ -579,6 +621,8 @@ type helperGuard struct {
 	ours     map[string]bool // наши exclude-маршруты (CIDR) — снимаем при выходе
 	foreign  map[string]bool // чужие host-маршруты через физический шлюз — бережём
 	restored map[string]bool // чужие, которые пришлось восстановить нам — снимаем при выходе
+	pendGW   string          // новый шлюз, ждущий подтверждения вторым замером
+	missing  map[string]int  // сколько проверок подряд чужой маршрут уходит в наш туннель
 }
 
 // snapshot — таблица маршрутов, не старше пары секунд (на пачку из тысяч add — один снимок).
@@ -666,10 +710,21 @@ func (g *helperGuard) watch(stop chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			gw := defaultGatewayDarwin()
+			gw := physicalGatewayDarwin()
 			if gw == "" {
+				continue // default сейчас не на физическом интерфейсе (другой VPN перестраивается)
+			}
+			// Новый шлюз принимаем только со второго замера подряд: во время
+			// переподключения Cisco таблица на секунды бывает странной, и
+			// переписывать тысячи маршрутов по ней нельзя
+			g.mu.Lock()
+			if gw != g.gw && gw != g.pendGW {
+				g.pendGW = gw
+				g.mu.Unlock()
 				continue
 			}
+			g.pendGW = ""
+			g.mu.Unlock()
 			g.learnForeignHostRoutes(gw)
 			g.check(gw)
 		}
@@ -698,10 +753,20 @@ func (g *helperGuard) check(gw string) {
 			_ = g.rt.Add(c, gwIP)
 		}
 	}
+	if g.missing == nil {
+		g.missing = map[string]int{}
+	}
 	for ip := range g.foreign {
 		if _, _, _, iface := routeGetDarwin(ip); iface != g.tunName {
+			delete(g.missing, ip)
 			continue
 		}
+		// Восстанавливаем, только если маршрут потерян дольше двух проверок (~40 с):
+		// при переподключении VPN сам ставит его заново, мешать ему нельзя
+		if g.missing[ip]++; g.missing[ip] < 2 {
+			continue
+		}
+		delete(g.missing, ip)
 		_ = runCmdDarwin("route", "-q", "-n", "delete", "-host", ip)
 		if runCmdDarwin("route", "-q", "-n", "add", "-host", ip, gw) == nil {
 			g.restored[ip] = true

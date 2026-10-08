@@ -383,11 +383,6 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 			excludes = append(excludes, ip+"/32")
 		}
 		excludes = append(excludes, vkExcludeCIDRs...)
-		user := currentUserExcludesFast(logf) // без DNS: медленный DNS не должен держать туннель
-		excludes = append(excludes, user...)
-		w.activeUserExcludes = user
-		w.refreshStop = make(chan struct{})
-		go w.excludeRefreshLoop(w.refreshStop, logf)
 		for _, cidr := range excludes {
 			ip, mask, err := parseCIDR(cidr)
 			if err != nil {
@@ -395,6 +390,16 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 			}
 			_ = runCmdWindows("route", "add", ip, "mask", mask, gw)
 		}
+		// Пользовательские исключения и «Россия» — из кэша, пачкой через API и ДО
+		// маршрутов туннеля, чтобы их трафик ни на миг не ушёл в туннель
+		user := currentAllExcludesFast(logf)
+		if _, err := bulkRoutes(true, gw, user); err != nil && len(user) > 0 {
+			logf("Исключения: " + err.Error())
+		}
+		excludes = append(excludes, user...)
+		w.activeUserExcludes = user
+		w.refreshStop = make(chan struct{})
+		go w.excludeRefreshLoop(w.refreshStop, logf)
 	}
 	w.activeExcludeRoutes = excludes
 
