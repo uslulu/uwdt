@@ -20,6 +20,7 @@
 }
 
 :root {
+  color-scheme: light;
   --bg: #f3f7fb;
   --bg-2: #eaf1f8;
   --bg-3: #dfe9f4;
@@ -51,6 +52,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0a111c;
   --bg-2: #101a28;
   --bg-3: #172334;

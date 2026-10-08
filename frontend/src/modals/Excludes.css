@@ -1,4 +1,4 @@
-.ex-modal { width: 420px; display: flex; flex-direction: column; max-height: 80vh; }
+.ex-modal { width: 460px; display: flex; flex-direction: column; max-height: 88vh; overflow-y: auto; overscroll-behavior: contain; }
 .ex-hint { font-size: 12px; color: var(--text-3); line-height: 1.45; margin: -6px 0 14px; }
 .ex-add { display: flex; gap: 8px; }
 .ex-input { flex: 1; min-width: 0; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); color: var(--text); font-size: 13px; font-family: 'Geist Mono', 'SF Mono', monospace; outline: none; transition: border-color 0.15s; }
@@ -7,7 +7,7 @@
 .ex-add-btn { width: 38px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 10px; background: var(--accent); color: var(--accent-fg); cursor: pointer; transition: opacity 0.15s; }
 .ex-add-btn:disabled { opacity: 0.4; cursor: default; }
 .ex-error { min-height: 18px; font-size: 11px; color: #ef4444; padding: 4px 2px 0; }
-.ex-list { overflow-y: auto; margin-top: 4px; min-height: 60px; }
+.ex-list { margin-top: 4px; flex-shrink: 0; }
 .ex-empty { font-size: 12px; color: var(--text-3); text-align: center; padding: 22px 0; }
 .ex-item { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--border-2); }
 .ex-item:last-child { border-bottom: none; }
@@ -26,7 +26,13 @@
 .ex-russia-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ex-russia-title { font-size: 14px; font-weight: 600; color: var(--text); }
 .ex-russia-sub { font-size: 11px; color: var(--text-3); line-height: 1.35; }
-.ex-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
-.ex-preset { padding: 5px 10px; border: 1px dashed var(--border); border-radius: 999px; background: none; color: var(--text-2); font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 600; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
-.ex-preset:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
-.ex-preset--added { border-style: solid; color: var(--text-3); cursor: default; }
+.ex-presets { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
+.ex-preset-group { display: flex; flex-direction: column; gap: 5px; }
+.ex-preset-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-4); }
+.ex-preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ex-preset { padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--text-2); font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 600; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+.ex-preset:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.ex-preset--on, .ex-preset--on:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
+.ex-preset:disabled { cursor: default; }
+.ex-value-sub { font-size: 11px; color: var(--text-4); margin-left: 4px; }
+.ex-value-label { font-family: 'Geist', sans-serif; font-weight: 600; }

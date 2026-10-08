@@ -3,6 +3,7 @@ import { IconArrowsSplit2, IconX, IconPlus, IconTrash } from '@tabler/icons-reac
 import type { ExcludeEntry } from '../lib/types';
 import { GetExcludes, SetExcludes, CheckExclude, GetRussiaDirect, SetRussiaDirect } from '../../wailsjs/go/backend/App';
 import { toastStore } from '../lib/stores/toastStore';
+import { PRESET_GROUPS, PRESET_LABEL, type Preset } from '../lib/presets';
 import './Settings.css';
 import './Excludes.css';
 
@@ -13,10 +14,6 @@ interface Props {
 const kindLabel = (v: string) =>
   /^AS\d+$/.test(v) ? 'компания' : /^[\d./]+$/.test(v) ? (v.endsWith('/32') ? 'адрес' : 'сеть') : 'домен';
 
-// Готовые наборы: сервис → его автономная система (все сети компании)
-const PRESETS = [
-  { label: 'Steam / Dota 2', value: 'AS32590' },
-];
 
 export default function Excludes({ onClose }: Props) {
   const [items, setItems] = useState<ExcludeEntry[]>([]);
@@ -84,6 +81,19 @@ export default function Excludes({ onClose }: Props) {
 
   const remove = (idx: number) => persist(items.filter((_, i) => i !== idx));
 
+  const presetOn = (p: Preset) => p.values.every(v => items.some(i => i.value === v && i.enabled));
+
+  // Набор включён — убираем его записи; выключен — добавляем недостающие и включаем выключенные
+  const togglePreset = (p: Preset) => {
+    if (presetOn(p)) {
+      persist(items.filter(i => !p.values.includes(i.value)));
+      return;
+    }
+    const next = items.map(i => (p.values.includes(i.value) ? { ...i, enabled: true } : i));
+    p.values.forEach(v => { if (!next.some(i => i.value === v)) next.push({ value: v, enabled: true }); });
+    persist(next);
+  };
+
   const toggleRussia = async () => {
     if (!ru) return;
     setSaving(true);
@@ -143,29 +153,40 @@ export default function Excludes({ onClose }: Props) {
         <div className="ex-error">{error}</div>
 
         <div className="ex-presets">
-          {PRESETS.map(p => {
-            const added = items.some(i => i.value === p.value);
-            return (
-              <button
-                key={p.value}
-                type="button"
-                className={`ex-preset${added ? ' ex-preset--added' : ''}`}
-                disabled={added || saving}
-                onClick={() => persist([...items, { value: p.value, enabled: true }])}
-                title={`Все сети ${p.value}`}
-              >
-                {added ? '✓ ' : '+ '}{p.label}
-              </button>
-            );
-          })}
+          {PRESET_GROUPS.map(g => (
+            <div key={g.title} className="ex-preset-group">
+              <span className="ex-preset-title">{g.title}</span>
+              <div className="ex-preset-row">
+                {g.presets.map(p => {
+                  const on = presetOn(p);
+                  return (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className={`ex-preset${on ? ' ex-preset--on' : ''}`}
+                      disabled={saving}
+                      onClick={() => togglePreset(p)}
+                      title={on ? 'Убрать из исключений' : `Пустить мимо туннеля: ${p.values.join(', ')}`}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
 
         <div className="ex-list">
           {items.length === 0 && <div className="ex-empty">Список пуст — весь трафик идёт через туннель</div>}
           {items.map((it, idx) => (
             <div key={it.value} className={`ex-item${it.enabled ? '' : ' ex-item--off'}`}>
-              <span className="ex-kind">{kindLabel(it.value)}</span>
-              <span className="ex-value" title={it.value}>{it.value.endsWith('/32') ? it.value.slice(0, -3) : it.value}</span>
+              <span className="ex-kind">{PRESET_LABEL[it.value] ? 'сервис' : kindLabel(it.value)}</span>
+              <span className="ex-value" title={it.value}>
+                {PRESET_LABEL[it.value]
+                  ? <><span className="ex-value-label">{PRESET_LABEL[it.value]}</span> <small className="ex-value-sub">{it.value}</small></>
+                  : it.value.endsWith('/32') ? it.value.slice(0, -3) : it.value}
+              </span>
               <button
                 type="button"
                 className={`st-toggle ex-toggle st-toggle--${it.enabled ? 'on' : 'off'}`}
