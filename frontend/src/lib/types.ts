@@ -17,6 +17,11 @@ export interface AppSettings {
   turnTcp: boolean;
 }
 
+export interface ExcludeEntry {
+  value: string;
+  enabled: boolean;
+}
+
 export type TunnelState = 'idle' | 'connecting' | 'connected' | 'disconnecting';
 
 export const DEFAULT_SETTINGS: AppSettings = {

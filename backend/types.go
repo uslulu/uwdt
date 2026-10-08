@@ -32,4 +32,6 @@ type AppSettings struct {
 	ObfsMode     string `json:"obfsMode"`     // audio/video
 	ObfsAccepted bool   `json:"obfsAccepted"` // пользователь принял предупреждение об обфускации
 	TurnTCP      bool   `json:"turnTcp"`      // использовать TCP транспорт
+
+	Excludes []ExcludeEntry `json:"excludes,omitempty"` // мимо туннеля: подсети, адреса, домены
 }

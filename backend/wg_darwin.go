@@ -16,6 +16,7 @@ package backend
 // приложение закрывает fd — явно их снимать не нужно.
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -66,8 +68,19 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 	}
 	excludes = append(excludes, vkExcludeCIDRs...)
 	for _, dns := range localDNSServers() {
+		// DNS, который уже ходит через другой VPN (Cisco и т.п.), не трогаем:
+		// иначе запросы к нему уйдут мимо того VPN и начнут таймаутить
+		if iface := routeIfaceDarwin(dns); strings.HasPrefix(iface, "utun") {
+			logf(fmt.Sprintf("DNS %s обслуживает %s — оставляю ему", dns, iface))
+			continue
+		}
 		excludes = append(excludes, dns+"/32")
 	}
+	userExcludes := currentUserExcludes(logf)
+	if len(userExcludes) > 0 {
+		logf(fmt.Sprintf("Пользовательских исключений: %d", len(userExcludes)))
+	}
+	excludes = append(excludes, userExcludes...)
 
 	// Туннельные маршруты: полный дефолт заменяем на split-default,
 	// чтобы не трогать физический default route
@@ -155,6 +168,9 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 	w.activeDevice = dev
 	w.helperConn = hconn
 	w.activeExcludeRoutes = excludes
+	w.activeUserExcludes = userExcludes
+	w.refreshStop = make(chan struct{})
+	go w.excludeRefreshLoop(w.refreshStop, logf)
 	w.activeRoutesMu.Lock()
 	w.activeRoutes = tunnels
 	w.activeRoutesMu.Unlock()
@@ -167,6 +183,12 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 func (w *WG) teardownDarwin() {
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
+
+	if w.refreshStop != nil {
+		close(w.refreshStop)
+		w.refreshStop = nil
+	}
+	w.activeUserExcludes = nil
 
 	// Останавливаем движок и закрываем fd — utun и его маршруты исчезают сами
 	if w.activeDevice != nil {
@@ -191,6 +213,98 @@ func (w *WG) teardownDarwin() {
 	w.activeRoutes = nil
 	w.activeRoutesMu.Unlock()
 	w.activeExcludeRoutes = nil
+}
+
+// refreshExcludesDarwin досылает helper'у разницу между применённым и
+// текущим списком исключений. Пароль не нужен: helper уже работает от root.
+func (w *WG) refreshExcludesDarwin(logf wgLogFunc) {
+	next := currentUserExcludes(logf) // DNS может тормозить — резолвим без блокировки
+
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if w.helperConn == nil {
+		return // туннель не поднят — список применится при подключении
+	}
+
+	// Встроенные исключения (VK, TURN, DNS) не трогаем, даже если пользователь
+	// продублировал их в своём списке, а потом удалил
+	builtin := map[string]bool{}
+	user := map[string]bool{}
+	for _, c := range w.activeUserExcludes {
+		user[c] = true
+	}
+	for _, c := range w.activeExcludeRoutes {
+		if !user[c] {
+			builtin[c] = true
+		}
+	}
+
+	add, del := diffCIDRs(w.activeUserExcludes, next)
+	var cmds strings.Builder
+	for _, c := range del {
+		if !builtin[c] {
+			cmds.WriteString("del " + c + "\n")
+		}
+	}
+	for _, c := range add {
+		if !builtin[c] {
+			cmds.WriteString("add " + c + "\n")
+		}
+	}
+	if cmds.Len() == 0 {
+		return
+	}
+	if _, err := w.helperConn.Write([]byte(cmds.String())); err != nil {
+		logf(fmt.Sprintf("Не удалось применить исключения: %v", err))
+		return
+	}
+	w.activeUserExcludes = next
+	logf(fmt.Sprintf("Исключения обновлены: +%d −%d", len(add), len(del)))
+}
+
+// excludeRefreshLoop периодически перерезолвит домены из списка исключений:
+// у сервисов адреса меняются, а маршрут привязан к адресу.
+func (w *WG) excludeRefreshLoop(stop chan struct{}, logf wgLogFunc) {
+	t := time.NewTicker(excludeRefreshInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			w.refreshExcludesDarwin(logf)
+		}
+	}
+}
+
+// routeGetDarwin — что macOS выберет для адреса: назначение, маска, шлюз, интерфейс.
+func routeGetDarwin(args ...string) (dst, mask, gw, iface string) {
+	out, err := exec.Command("route", append([]string{"-n", "get"}, args...)...).Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		switch f[0] {
+		case "destination:":
+			dst = f[1]
+		case "mask:":
+			mask = f[1]
+		case "gateway:":
+			gw = f[1]
+		case "interface:":
+			iface = f[1]
+		}
+	}
+	return
+}
+
+func routeIfaceDarwin(ip string) string {
+	_, _, _, iface := routeGetDarwin(ip)
+	return iface
 }
 
 // recvTunFD читает сообщения helper'а до получения fd интерфейса.
@@ -418,6 +532,15 @@ func RunWGHelperDarwin(args []string) {
 		send(wgHelperMsg{Log: fmt.Sprintf("Exclude-маршрутов добавлено: %d", len(added))}, -1)
 	}
 
+	// Чужие маршруты к отдельным адресам через физический шлюз — обычно это
+	// сервер корпоративного VPN (Cisco и т.п.). Запоминаем ДО туннельных
+	// маршрутов и дальше следим, чтобы они не уехали в наш туннель.
+	g := &helperGuard{tunName: name, ours: map[string]bool{}, foreign: map[string]bool{}, restored: map[string]bool{}}
+	for _, c := range added {
+		g.ours[c] = true
+	}
+	g.learnForeignHostRoutes(gw)
+
 	for _, cidr := range splitCSV(*tunnels) {
 		if err := runCmdDarwin("route", "-q", "-n", "add", "-net", cidr, "-interface", name); err != nil {
 			send(wgHelperMsg{Log: fmt.Sprintf("tunnel route %s: %v", cidr, err)}, -1)
@@ -427,18 +550,165 @@ func RunWGHelperDarwin(args []string) {
 	// Передаём fd интерфейса приложению
 	send(wgHelperMsg{Name: name}, int(dev.File().Fd()))
 
-	// Ждём "down" или обрыв соединения (краш приложения) → уборка
-	buf := make([]byte, 64)
+	stop := make(chan struct{})
+	go g.watch(stop)
+
+	// Команды приложения: "add CIDR" / "del CIDR" — правка исключений на лету,
+	// "down" или обрыв соединения (краш приложения) → уборка
+	reader := bufio.NewReader(hconn)
 	for {
-		n, err := hconn.Read(buf)
-		if err != nil || strings.Contains(string(buf[:n]), "down") {
+		line, err := reader.ReadString('\n')
+		f := strings.Fields(line)
+		if len(f) == 1 && f[0] == "down" {
+			break
+		}
+		if len(f) == 2 && (f[0] == "add" || f[0] == "del") {
+			g.apply(f[0], f[1])
+		}
+		if err != nil {
 			break
 		}
 	}
-	for _, cidr := range added {
-		_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", cidr)
-	}
+	close(stop)
+	g.cleanup()
 	runtime.KeepAlive(dev)
+}
+
+// helperGuard (root) держит исключения на месте: после смены сети шлюз
+// другой, а Cisco и прочие при переподключении переписывают таблицу.
+type helperGuard struct {
+	mu       sync.Mutex
+	tunName  string
+	ours     map[string]bool // наши exclude-маршруты (CIDR) — снимаем при выходе
+	foreign  map[string]bool // чужие host-маршруты через физический шлюз — бережём
+	restored map[string]bool // чужие, которые пришлось восстановить нам — снимаем при выходе
+}
+
+func validExcludeCIDR(c string) (string, bool) {
+	ip, n, err := net.ParseCIDR(c)
+	if err != nil || ip.To4() == nil {
+		return "", false
+	}
+	if ones, _ := n.Mask.Size(); ones < 8 {
+		return "", false
+	}
+	return n.String(), true
+}
+
+func (g *helperGuard) apply(op, cidr string) {
+	c, ok := validExcludeCIDR(cidr)
+	if !ok {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch op {
+	case "add":
+		gw := defaultGatewayDarwin()
+		if gw == "" {
+			return
+		}
+		_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", c)
+		if runCmdDarwin("route", "-q", "-n", "add", "-net", c, gw) == nil {
+			g.ours[c] = true
+		}
+	case "del":
+		if g.ours[c] {
+			_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", c)
+			delete(g.ours, c)
+		}
+	}
+}
+
+// learnForeignHostRoutes запоминает статические маршруты к отдельным адресам
+// через физический шлюз, поставленные не нами (например Cisco к своему серверу).
+func (g *helperGuard) learnForeignHostRoutes(gw string) {
+	if gw == "" {
+		return
+	}
+	out, err := exec.Command("netstat", "-rn", "-f", "inet").Output()
+	if err != nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[1] != gw || !strings.HasPrefix(f[3], "en") {
+			continue
+		}
+		flags := f[2]
+		if !strings.Contains(flags, "G") || !strings.Contains(flags, "S") {
+			continue
+		}
+		dst := f[0]
+		if strings.HasSuffix(dst, "/32") {
+			dst = strings.TrimSuffix(dst, "/32")
+		} else if !strings.Contains(flags, "H") {
+			continue
+		}
+		if ip := net.ParseIP(dst); ip == nil || ip.To4() == nil || g.ours[dst+"/32"] {
+			continue
+		}
+		g.foreign[dst] = true
+	}
+}
+
+func (g *helperGuard) watch(stop chan struct{}) {
+	t := time.NewTicker(20 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			gw := defaultGatewayDarwin()
+			if gw == "" {
+				continue
+			}
+			g.learnForeignHostRoutes(gw)
+			g.check(gw)
+		}
+	}
+}
+
+// check возвращает на место наши исключения и чужие host-маршруты,
+// если их снесли или они ведут на старый шлюз.
+func (g *helperGuard) check(gw string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for c := range g.ours {
+		_, n, _ := net.ParseCIDR(c)
+		ones, _ := n.Mask.Size()
+		dst, mask, rgw, _ := routeGetDarwin("-net", c)
+		want := n.IP.String()
+		maskOK := mask == net.IP(n.Mask).String() || (ones == 32 && mask == "")
+		if dst == want && maskOK && rgw == gw {
+			continue
+		}
+		_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", c)
+		_ = runCmdDarwin("route", "-q", "-n", "add", "-net", c, gw)
+	}
+	for ip := range g.foreign {
+		if _, _, _, iface := routeGetDarwin(ip); iface != g.tunName {
+			continue
+		}
+		_ = runCmdDarwin("route", "-q", "-n", "delete", "-host", ip)
+		if runCmdDarwin("route", "-q", "-n", "add", "-host", ip, gw) == nil {
+			g.restored[ip] = true
+		}
+	}
+}
+
+func (g *helperGuard) cleanup() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for c := range g.ours {
+		_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", c)
+	}
+	for ip := range g.restored {
+		_ = runCmdDarwin("route", "-q", "-n", "delete", "-host", ip)
+	}
 }
 
 func splitCSV(s string) []string {

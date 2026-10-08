@@ -73,3 +73,15 @@ export function Shutdown(arg1) {
 export function Startup(arg1) {
   return window['go']['backend']['App']['Startup'](arg1);
 }
+
+export function CheckExclude(arg1) {
+  return window['go']['backend']['App']['CheckExclude'](arg1);
+}
+
+export function GetExcludes() {
+  return window['go']['backend']['App']['GetExcludes']();
+}
+
+export function SetExcludes(arg1) {
+  return window['go']['backend']['App']['SetExcludes'](arg1);
+}

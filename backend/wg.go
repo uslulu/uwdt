@@ -48,6 +48,10 @@ type WG struct {
 
 	// macOS-specific: соединение с привилегированным helper-процессом
 	helperConn *net.UnixConn
+
+	// Пользовательские исключения, применённые сейчас (CIDR), и остановка их обновления
+	activeUserExcludes []string
+	refreshStop        chan struct{}
 }
 
 type wgLogFunc func(msg string)
@@ -78,6 +82,15 @@ func CleanupStaleExcludeRoutes(logf wgLogFunc) {
 	if runtime.GOOS == "darwin" {
 		cleanupStaleExcludeRoutesDarwin(logf)
 	}
+}
+
+// RefreshExcludes применяет текущий список исключений к поднятому туннелю
+// (после правки списка или для обновления адресов доменов).
+func (w *WG) RefreshExcludes(logf wgLogFunc) {
+	if logf == nil {
+		logf = func(msg string) { log.Printf("[WG] %s", msg) }
+	}
+	w.refreshExcludesDarwin(logf)
 }
 
 func (w *WG) Teardown() {
@@ -195,7 +208,7 @@ func (w *WG) applyLinux(conf string, turnIPs []string, logf wgLogFunc) error {
 				routes = append(routes, ip+"/32")
 			}
 		}
-		for _, cidr := range vkExcludeCIDRs {
+		for _, cidr := range append(append([]string{}, vkExcludeCIDRs...), currentUserExcludes(logf)...) {
 			if runCmdLinux("ip", "route", "add", cidr, "via", gw) == nil {
 				routes = append(routes, cidr)
 			}
@@ -363,6 +376,7 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 			excludes = append(excludes, ip+"/32")
 		}
 		excludes = append(excludes, vkExcludeCIDRs...)
+		excludes = append(excludes, currentUserExcludes(logf)...)
 		for _, cidr := range excludes {
 			ip, mask, err := parseCIDR(cidr)
 			if err != nil {

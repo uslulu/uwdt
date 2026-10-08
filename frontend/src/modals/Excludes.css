@@ -1,0 +1,23 @@
+.ex-modal { width: 420px; display: flex; flex-direction: column; max-height: 80vh; }
+.ex-hint { font-size: 12px; color: var(--text-3); line-height: 1.45; margin: -6px 0 14px; }
+.ex-add { display: flex; gap: 8px; }
+.ex-input { flex: 1; min-width: 0; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); color: var(--text); font-size: 13px; font-family: 'Geist Mono', 'SF Mono', monospace; outline: none; transition: border-color 0.15s; }
+.ex-input:focus { border-color: var(--accent); }
+.ex-input--error, .ex-input--error:focus { border-color: #ef4444; }
+.ex-add-btn { width: 38px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 10px; background: var(--accent); color: var(--accent-fg); cursor: pointer; transition: opacity 0.15s; }
+.ex-add-btn:disabled { opacity: 0.4; cursor: default; }
+.ex-error { min-height: 18px; font-size: 11px; color: #ef4444; padding: 4px 2px 0; }
+.ex-list { overflow-y: auto; margin-top: 4px; min-height: 60px; }
+.ex-empty { font-size: 12px; color: var(--text-3); text-align: center; padding: 22px 0; }
+.ex-item { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--border-2); }
+.ex-item:last-child { border-bottom: none; }
+.ex-item--off .ex-value, .ex-item--off .ex-kind { opacity: 0.45; }
+.ex-kind { flex-shrink: 0; width: 48px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent); }
+.ex-value { flex: 1; min-width: 0; font-size: 13px; font-family: 'Geist Mono', 'SF Mono', monospace; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-toggle { transform: scale(0.8); }
+.ex-del { flex-shrink: 0; display: flex; padding: 4px; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 6px; transition: color 0.15s, background 0.15s; }
+.ex-del:hover { color: #ef4444; background: var(--seg-bg); }
+.ex-del:disabled, .ex-toggle:disabled { cursor: default; }
+.st-row--link { cursor: pointer; }
+.st-row--link:hover .st-row-value { color: var(--text); }
+.st-row-value { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-3); transition: color 0.15s; }

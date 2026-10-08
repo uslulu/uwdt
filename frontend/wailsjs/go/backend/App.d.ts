@@ -38,3 +38,9 @@ export function SetObfsMode(arg1:string):Promise<void>;
 export function Shutdown(arg1:context.Context):Promise<void>;
 
 export function Startup(arg1:context.Context):Promise<void>;
+
+export function CheckExclude(arg1:string):Promise<string>;
+
+export function GetExcludes():Promise<Array<backend.ExcludeEntry>>;
+
+export function SetExcludes(arg1:Array<backend.ExcludeEntry>):Promise<Array<backend.ExcludeEntry>>;

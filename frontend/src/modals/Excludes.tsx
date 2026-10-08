@@ -1,0 +1,131 @@
+import { useState, useEffect, useRef } from 'react';
+import { IconArrowsSplit2, IconX, IconPlus, IconTrash } from '@tabler/icons-react';
+import type { ExcludeEntry } from '../lib/types';
+import { GetExcludes, SetExcludes, CheckExclude } from '../../wailsjs/go/backend/App';
+import { toastStore } from '../lib/stores/toastStore';
+import './Settings.css';
+import './Excludes.css';
+
+interface Props {
+  onClose: () => void;
+}
+
+const isDomain = (v: string) => !/^[\d./]+$/.test(v);
+
+export default function Excludes({ onClose }: Props) {
+  const [items, setItems] = useState<ExcludeEntry[]>([]);
+  const [input, setInput] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    GetExcludes().then(list => setItems(list ?? [])).catch(() => toastStore.show('Не удалось загрузить исключения', 3000));
+    inputRef.current?.focus();
+    return () => { if (checkTimer.current) clearTimeout(checkTimer.current); };
+  }, []);
+
+  // Сохраняем сразу: бэкенд нормализует список и применяет его к поднятому туннелю
+  const persist = async (next: ExcludeEntry[]) => {
+    setSaving(true);
+    try {
+      const clean = await SetExcludes(next);
+      setItems(clean ?? []);
+      return true;
+    } catch (e) {
+      toastStore.show(String(e), 3000);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onInput = (v: string) => {
+    setInput(v);
+    setError('');
+    if (checkTimer.current) clearTimeout(checkTimer.current);
+    if (!v.trim()) return;
+    checkTimer.current = setTimeout(() => {
+      CheckExclude(v).catch(e => setError(String(e)));
+    }, 400);
+  };
+
+  const add = async () => {
+    const raw = input.trim();
+    if (!raw) return;
+    let value: string;
+    try {
+      value = await CheckExclude(raw);
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    if (items.some(i => i.value === value)) {
+      setError('Уже есть в списке');
+      return;
+    }
+    if (await persist([...items, { value, enabled: true }])) {
+      setInput('');
+      inputRef.current?.focus();
+    }
+  };
+
+  const toggle = (idx: number) =>
+    persist(items.map((it, i) => (i === idx ? { ...it, enabled: !it.enabled } : it)));
+
+  const remove = (idx: number) => persist(items.filter((_, i) => i !== idx));
+
+  return (
+    <div className="st-overlay" onClick={onClose}>
+      <div className="st-modal ex-modal" onClick={e => e.stopPropagation()}>
+        <div className="st-header">
+          <IconArrowsSplit2 stroke={2} size={20} />
+          <span className="st-title">Исключения из туннеля</span>
+          <button type="button" className="st-close" onClick={onClose} aria-label="Закрыть"><IconX size={18} /></button>
+        </div>
+
+        <div className="ex-hint">
+          Эти адреса идут напрямую, мимо туннеля. Подсеть, адрес или домен — изменения применяются сразу.
+        </div>
+
+        <form className="ex-add" onSubmit={e => { e.preventDefault(); add(); }}>
+          <input
+            ref={inputRef}
+            className={`ex-input${error ? ' ex-input--error' : ''}`}
+            value={input}
+            onChange={e => onInput(e.target.value)}
+            placeholder="10.0.0.0/8 или meet.example.ru"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+          <button type="submit" className="ex-add-btn" disabled={!input.trim() || !!error || saving} aria-label="Добавить">
+            <IconPlus size={18} />
+          </button>
+        </form>
+        <div className="ex-error">{error}</div>
+
+        <div className="ex-list">
+          {items.length === 0 && <div className="ex-empty">Список пуст — весь трафик идёт через туннель</div>}
+          {items.map((it, idx) => (
+            <div key={it.value} className={`ex-item${it.enabled ? '' : ' ex-item--off'}`}>
+              <span className="ex-kind">{isDomain(it.value) ? 'домен' : it.value.endsWith('/32') ? 'адрес' : 'сеть'}</span>
+              <span className="ex-value" title={it.value}>{it.value.endsWith('/32') ? it.value.slice(0, -3) : it.value}</span>
+              <button
+                type="button"
+                className={`st-toggle ex-toggle st-toggle--${it.enabled ? 'on' : 'off'}`}
+                aria-label={it.enabled ? 'Выключить исключение' : 'Включить исключение'}
+                onClick={() => toggle(idx)}
+                disabled={saving}
+              />
+              <button type="button" className="ex-del" onClick={() => remove(idx)} aria-label="Удалить" disabled={saving}>
+                <IconTrash size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

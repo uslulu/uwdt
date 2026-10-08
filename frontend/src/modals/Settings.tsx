@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { IconSettings2, IconX, IconHeartFilled, IconBug, IconAlertTriangle } from '@tabler/icons-react';
+import { IconSettings2, IconX, IconHeartFilled, IconBug, IconAlertTriangle, IconChevronRight } from '@tabler/icons-react';
 import { settingsStore } from '../lib/store';
 import type { AppSettings } from '../lib/types';
-import { SetAutoStart, GetAutoStart, GetVersion, GenerateReport, GetObfsAccepted, SetObfsAccepted, SetObfsMode } from '../../wailsjs/go/backend/App';
+import { SetAutoStart, GetAutoStart, GetVersion, GenerateReport, GetObfsAccepted, SetObfsAccepted, SetObfsMode, GetExcludes } from '../../wailsjs/go/backend/App';
+import Excludes from './Excludes';
+import './Excludes.css';
 import { BrowserOpenURL } from '../../wailsjs/runtime/runtime';
 import { logStore } from '../lib/stores/logStore';
 import { toastStore } from '../lib/stores/toastStore';
@@ -18,6 +20,8 @@ export default function Settings({ onClose }: Props) {
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showObfsModal, setShowObfsModal] = useState(false);
   const [pendingObfsMode, setPendingObfsMode] = useState<'audio' | 'video'>('audio');
+  const [showExcludes, setShowExcludes] = useState(false);
+  const [excludeCount, setExcludeCount] = useState(0);
 
   const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     setSettings(s => {
@@ -39,6 +43,7 @@ export default function Settings({ onClose }: Props) {
       update('obfsAccepted', v);
     }).catch(() => {});
     GetVersion().then(setVersion).catch(() => {});
+    GetExcludes().then(l => setExcludeCount((l ?? []).filter(e => e.enabled).length)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -119,6 +124,11 @@ export default function Settings({ onClose }: Props) {
             </div>
           </div>
 
+          <div className="st-row st-row--link" onClick={() => setShowExcludes(true)}>
+            <span>Исключения из туннеля</span>
+            <span className="st-row-value">{excludeCount > 0 ? excludeCount : 'нет'}<IconChevronRight size={16} /></span>
+          </div>
+
           <div className="st-info">
             <div className="st-info-name">PWDTT</div>
             <div className="st-info-ver">v{version}</div>
@@ -137,6 +147,13 @@ export default function Settings({ onClose }: Props) {
           </button>
         </div>
       </div>
+
+      {showExcludes && (
+        <Excludes onClose={() => {
+          setShowExcludes(false);
+          GetExcludes().then(l => setExcludeCount((l ?? []).filter(e => e.enabled).length)).catch(() => {});
+        }} />
+      )}
 
       {showObfsModal && (
         <div className="st-overlay" onClick={() => setShowObfsModal(false)}>

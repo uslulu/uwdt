@@ -6,7 +6,7 @@ import (
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const Version = "1.6.0"
+const Version = "1.6.0-excl"
 
 // App — главный объект приложения.
 // Wails привязывает его методы к frontend через Bind().
@@ -33,6 +33,7 @@ func (a *App) Startup(ctx context.Context) {
 
 	settings := a.store.LoadSettings()
 	a.bridge = NewBridge(ctx, a.store, a.onBridgeEvent)
+	SetExcludeSource(func() []ExcludeEntry { return a.store.LoadSettings().Excludes })
 
 	if settings.AutoStart {
 		a.SetAutoStart(true)
@@ -124,6 +125,42 @@ func (a *App) SetObfsAccepted(v bool) error {
 	settings := a.store.LoadSettings()
 	settings.ObfsAccepted = v
 	return a.store.SaveSettings(settings)
+}
+
+// ═══════════════════════════════════════════════════
+// EXCLUDES — что идёт мимо туннеля
+// ═══════════════════════════════════════════════════
+
+func (a *App) GetExcludes() []ExcludeEntry {
+	ex := a.store.LoadSettings().Excludes
+	if ex == nil {
+		ex = []ExcludeEntry{}
+	}
+	return ex
+}
+
+// SetExcludes сохраняет список и, если туннель поднят, сразу применяет его.
+func (a *App) SetExcludes(entries []ExcludeEntry) ([]ExcludeEntry, error) {
+	clean, err := ValidateExcludes(entries)
+	if err != nil {
+		return nil, err
+	}
+	settings := a.store.LoadSettings()
+	settings.Excludes = clean
+	if err := a.store.SaveSettings(settings); err != nil {
+		return nil, err
+	}
+	go wg.RefreshExcludes(func(msg string) { a.onBridgeEvent("log", "INFO", "[WG] "+msg) })
+	if clean == nil {
+		clean = []ExcludeEntry{}
+	}
+	return clean, nil
+}
+
+// CheckExclude возвращает нормализованное значение или текст ошибки — для подсказки в поле ввода.
+func (a *App) CheckExclude(raw string) (string, error) {
+	_, v, err := NormalizeExclude(raw)
+	return v, err
 }
 
 func (a *App) CheckUpdate() *UpdateInfo {

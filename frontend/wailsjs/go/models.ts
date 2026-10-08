@@ -28,6 +28,20 @@ export namespace backend {
 	        this.turnTcp = source["turnTcp"];
 	    }
 	}
+	export class ExcludeEntry {
+	    value: string;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExcludeEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class LogEntry {
 	    level: string;
 	    message: string;
