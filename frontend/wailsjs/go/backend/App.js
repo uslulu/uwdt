@@ -89,3 +89,11 @@ export function SetExcludes(arg1) {
 export function PingHost(arg1) {
   return window['go']['backend']['App']['PingHost'](arg1);
 }
+
+export function GetRussiaDirect() {
+  return window['go']['backend']['App']['GetRussiaDirect']();
+}
+
+export function SetRussiaDirect(arg1) {
+  return window['go']['backend']['App']['SetRussiaDirect'](arg1);
+}

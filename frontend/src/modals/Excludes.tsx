@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { IconArrowsSplit2, IconX, IconPlus, IconTrash } from '@tabler/icons-react';
 import type { ExcludeEntry } from '../lib/types';
-import { GetExcludes, SetExcludes, CheckExclude } from '../../wailsjs/go/backend/App';
+import { GetExcludes, SetExcludes, CheckExclude, GetRussiaDirect, SetRussiaDirect } from '../../wailsjs/go/backend/App';
 import { toastStore } from '../lib/stores/toastStore';
 import './Settings.css';
 import './Excludes.css';
@@ -17,11 +17,13 @@ export default function Excludes({ onClose }: Props) {
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [ru, setRu] = useState<{ enabled: boolean; count: number; updated: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     GetExcludes().then(list => setItems(list ?? [])).catch(() => toastStore.show('Не удалось загрузить исключения', 3000));
+    GetRussiaDirect().then(setRu).catch(() => {});
     inputRef.current?.focus();
     return () => { if (checkTimer.current) clearTimeout(checkTimer.current); };
   }, []);
@@ -76,6 +78,18 @@ export default function Excludes({ onClose }: Props) {
 
   const remove = (idx: number) => persist(items.filter((_, i) => i !== idx));
 
+  const toggleRussia = async () => {
+    if (!ru) return;
+    setSaving(true);
+    try {
+      setRu(await SetRussiaDirect(!ru.enabled));
+    } catch (e) {
+      toastStore.show(String(e), 3000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="st-overlay" onClick={onClose}>
       <div className="st-modal ex-modal" onClick={e => e.stopPropagation()}>
@@ -87,6 +101,22 @@ export default function Excludes({ onClose }: Props) {
 
         <div className="ex-hint">
           Эти адреса идут напрямую, мимо туннеля. Подсеть, адрес или домен — изменения применяются сразу.
+        </div>
+
+        <div className={`ex-russia${ru?.enabled ? ' ex-russia--on' : ''}`}>
+          <div className="ex-russia-text">
+            <span className="ex-russia-title">Россия напрямую</span>
+            <span className="ex-russia-sub">
+              {ru ? `Все российские сети мимо туннеля · ${ru.count.toLocaleString('ru-RU')} сетей${ru.updated ? `, список от ${ru.updated}` : ''}` : 'Загрузка…'}
+            </span>
+          </div>
+          <button
+            type="button"
+            className={`st-toggle st-toggle--${ru?.enabled ? 'on' : 'off'}`}
+            aria-label={ru?.enabled ? 'Выключить «Россия напрямую»' : 'Включить «Россия напрямую»'}
+            onClick={toggleRussia}
+            disabled={!ru || saving}
+          />
         </div>
 
         <form className="ex-add" onSubmit={e => { e.preventDefault(); add(); }}>

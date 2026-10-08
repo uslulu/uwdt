@@ -88,6 +88,22 @@ export namespace backend {
 	        this.turn_tcp = source["turn_tcp"];
 	    }
 	}
+	export class RussiaInfo {
+	    enabled: boolean;
+	    count: number;
+	    updated: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RussiaInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.count = source["count"];
+	        this.updated = source["updated"];
+	    }
+	}
 	export class UpdateInfo {
 	    available: boolean;
 	    version: string;

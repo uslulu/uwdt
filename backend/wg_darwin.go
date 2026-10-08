@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -177,6 +178,9 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 	w.stateMu.Unlock()
 
 	logf(fmt.Sprintf("Туннель %s поднят, маршруты: %v", utunName, tunnels))
+	if russiaDirectEnabled() {
+		go w.RefreshExcludes(logf) // ~9 тыс. сетей — уже через helper, не через командную строку
+	}
 	return nil
 }
 
@@ -218,7 +222,7 @@ func (w *WG) teardownDarwin() {
 // refreshExcludesDarwin досылает helper'у разницу между применённым и
 // текущим списком исключений. Пароль не нужен: helper уже работает от root.
 func (w *WG) refreshExcludesDarwin(logf wgLogFunc) {
-	next := currentUserExcludes(logf) // DNS может тормозить — резолвим без блокировки
+	next := currentAllExcludes(logf) // DNS может тормозить — резолвим без блокировки
 
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
@@ -520,7 +524,12 @@ func RunWGHelperDarwin(args []string) {
 	// Чужие маршруты к отдельным адресам через физический шлюз — обычно это
 	// сервер корпоративного VPN (Cisco и т.п.). Запоминаем ДО туннельных
 	// маршрутов и дальше следим, чтобы они не уехали в наш туннель.
-	g := &helperGuard{tunName: name, ours: map[string]bool{}, foreign: map[string]bool{}, restored: map[string]bool{}}
+	rt, err := openRtSock()
+	if err != nil {
+		fail("%v", err)
+	}
+	defer rt.Close()
+	g := &helperGuard{tunName: name, rt: rt, gw: gw, ours: map[string]bool{}, foreign: map[string]bool{}, restored: map[string]bool{}}
 	for _, c := range added {
 		g.ours[c] = true
 	}
@@ -564,24 +573,27 @@ func RunWGHelperDarwin(args []string) {
 type helperGuard struct {
 	mu       sync.Mutex
 	tunName  string
+	rt       *rtSock
+	gw       string             // текущий физический шлюз
+	snap     map[string]rtEntry // снимок таблицы маршрутов
+	snapAt   time.Time
 	ours     map[string]bool // наши exclude-маршруты (CIDR) — снимаем при выходе
 	foreign  map[string]bool // чужие host-маршруты через физический шлюз — бережём
 	restored map[string]bool // чужие, которые пришлось восстановить нам — снимаем при выходе
 }
 
-func validExcludeCIDR(c string) (string, bool) {
-	ip, n, err := net.ParseCIDR(c)
-	if err != nil || ip.To4() == nil {
-		return "", false
+// snapshot — таблица маршрутов, не старше пары секунд (на пачку из тысяч add — один снимок).
+func (g *helperGuard) snapshot() map[string]rtEntry {
+	if g.snap == nil || time.Since(g.snapAt) > 2*time.Second {
+		if m, err := gatewayRoutes(); err == nil {
+			g.snap, g.snapAt = m, time.Now()
+		}
 	}
-	if ones, _ := n.Mask.Size(); ones < 8 {
-		return "", false
-	}
-	return n.String(), true
+	return g.snap
 }
 
 func (g *helperGuard) apply(op, cidr string) {
-	c, ok := validExcludeCIDR(cidr)
+	c, ok := validExcludeNet(cidr)
 	if !ok {
 		return
 	}
@@ -589,17 +601,25 @@ func (g *helperGuard) apply(op, cidr string) {
 	defer g.mu.Unlock()
 	switch op {
 	case "add":
-		gw := defaultGatewayDarwin()
-		if gw == "" {
+		gw := net.ParseIP(g.gw)
+		if gw == nil {
 			return
 		}
-		_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", c)
-		if runCmdDarwin("route", "-q", "-n", "add", "-net", c, gw) == nil {
+		err := g.rt.Add(c, gw)
+		if errors.Is(err, syscall.EEXIST) {
+			// Маршрут на эту сеть уже есть. Если он ведёт в другой VPN (Cisco
+			// прописал свою сеть) — не трогаем, иначе ломаем корпоративный доступ
+			if e := g.snapshot()[c]; strings.HasPrefix(e.iface, "utun") {
+				return
+			}
+			err = g.rt.Change(c, gw)
+		}
+		if err == nil {
 			g.ours[c] = true
 		}
 	case "del":
 		if g.ours[c] {
-			_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", c)
+			_ = g.rt.Delete(c)
 			delete(g.ours, c)
 		}
 	}
@@ -658,21 +678,26 @@ func (g *helperGuard) watch(stop chan struct{}) {
 }
 
 // check возвращает на место наши исключения и чужие host-маршруты,
-// если их снесли или они ведут на старый шлюз.
+// если их снесли или они ведут на старый шлюз. Один снимок таблицы на всё.
 func (g *helperGuard) check(gw string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.gw = gw
+	g.snap = nil
+	snap := g.snapshot()
+	gwIP := net.ParseIP(gw)
 	for c := range g.ours {
-		_, n, _ := net.ParseCIDR(c)
-		ones, _ := n.Mask.Size()
-		dst, mask, rgw, _ := routeGetDarwin("-net", c)
-		want := n.IP.String()
-		maskOK := mask == net.IP(n.Mask).String() || (ones == 32 && mask == "")
-		if dst == want && maskOK && rgw == gw {
+		e, exists := snap[c]
+		switch {
+		case exists && e.gw == gw:
 			continue
+		case exists && strings.HasPrefix(e.iface, "utun"):
+			continue // сеть забрал другой VPN — его право
+		case exists:
+			_ = g.rt.Change(c, gwIP) // ведёт на старый шлюз после смены сети
+		default:
+			_ = g.rt.Add(c, gwIP)
 		}
-		_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", c)
-		_ = runCmdDarwin("route", "-q", "-n", "add", "-net", c, gw)
 	}
 	for ip := range g.foreign {
 		if _, _, _, iface := routeGetDarwin(ip); iface != g.tunName {
@@ -689,7 +714,7 @@ func (g *helperGuard) cleanup() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for c := range g.ours {
-		_ = runCmdDarwin("route", "-q", "-n", "delete", "-net", c)
+		_ = g.rt.Delete(c)
 	}
 	for ip := range g.restored {
 		_ = runCmdDarwin("route", "-q", "-n", "delete", "-host", ip)

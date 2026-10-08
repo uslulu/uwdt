@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { IconSettings2, IconX, IconHeartFilled, IconBug, IconAlertTriangle, IconChevronRight } from '@tabler/icons-react';
 import { settingsStore } from '../lib/store';
 import type { AppSettings } from '../lib/types';
-import { SetAutoStart, GetAutoStart, GetVersion, GenerateReport, GetObfsAccepted, SetObfsAccepted, SetObfsMode, GetExcludes } from '../../wailsjs/go/backend/App';
+import { SetAutoStart, GetAutoStart, GetVersion, GenerateReport, GetObfsAccepted, SetObfsAccepted, SetObfsMode, GetExcludes, GetRussiaDirect } from '../../wailsjs/go/backend/App';
 import Excludes from './Excludes';
 import './Excludes.css';
 import { BrowserOpenURL } from '../../wailsjs/runtime/runtime';
@@ -22,6 +22,11 @@ export default function Settings({ onClose }: Props) {
   const [pendingObfsMode, setPendingObfsMode] = useState<'audio' | 'video'>('audio');
   const [showExcludes, setShowExcludes] = useState(false);
   const [excludeCount, setExcludeCount] = useState(0);
+  const [russiaOn, setRussiaOn] = useState(false);
+  const loadExcludeSummary = () => {
+    GetExcludes().then(l => setExcludeCount((l ?? []).filter(e => e.enabled).length)).catch(() => {});
+    GetRussiaDirect().then(r => setRussiaOn(!!r?.enabled)).catch(() => {});
+  };
 
   const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     setSettings(s => {
@@ -43,7 +48,7 @@ export default function Settings({ onClose }: Props) {
       update('obfsAccepted', v);
     }).catch(() => {});
     GetVersion().then(setVersion).catch(() => {});
-    GetExcludes().then(l => setExcludeCount((l ?? []).filter(e => e.enabled).length)).catch(() => {});
+    loadExcludeSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -126,7 +131,7 @@ export default function Settings({ onClose }: Props) {
 
           <div className="st-row st-row--link" onClick={() => setShowExcludes(true)}>
             <span>Исключения из туннеля</span>
-            <span className="st-row-value">{excludeCount > 0 ? excludeCount : 'нет'}<IconChevronRight size={16} /></span>
+            <span className="st-row-value">{[russiaOn ? 'Россия' : '', excludeCount > 0 ? String(excludeCount) : ''].filter(Boolean).join(' + ') || 'нет'}<IconChevronRight size={16} /></span>
           </div>
 
           <div className="st-info">
@@ -151,7 +156,7 @@ export default function Settings({ onClose }: Props) {
       {showExcludes && (
         <Excludes onClose={() => {
           setShowExcludes(false);
-          GetExcludes().then(l => setExcludeCount((l ?? []).filter(e => e.enabled).length)).catch(() => {});
+          loadExcludeSummary();
         }} />
       )}
 

@@ -34,6 +34,7 @@ func (a *App) Startup(ctx context.Context) {
 	settings := a.store.LoadSettings()
 	a.bridge = NewBridge(ctx, a.store, a.onBridgeEvent)
 	SetExcludeSource(func() []ExcludeEntry { return a.store.LoadSettings().Excludes })
+	SetRussiaDirectSource(func() bool { return a.store.LoadSettings().RussiaDirect })
 
 	if settings.AutoStart {
 		a.SetAutoStart(true)
@@ -155,6 +156,30 @@ func (a *App) SetExcludes(entries []ExcludeEntry) ([]ExcludeEntry, error) {
 		clean = []ExcludeEntry{}
 	}
 	return clean, nil
+}
+
+// RussiaInfo — для переключателя «Россия напрямую».
+type RussiaInfo struct {
+	Enabled bool   `json:"enabled"`
+	Count   int    `json:"count"`
+	Updated string `json:"updated"` // дата списка
+}
+
+func (a *App) GetRussiaDirect() RussiaInfo {
+	info := RussiaInfo{Enabled: a.store.LoadSettings().RussiaDirect}
+	info.Count = len(russiaNets(nil))
+	info.Updated = russiaNetsDate()
+	return info
+}
+
+func (a *App) SetRussiaDirect(v bool) (RussiaInfo, error) {
+	settings := a.store.LoadSettings()
+	settings.RussiaDirect = v
+	if err := a.store.SaveSettings(settings); err != nil {
+		return RussiaInfo{}, err
+	}
+	go wg.RefreshExcludes(func(msg string) { a.onBridgeEvent("log", "INFO", "[WG] "+msg) })
+	return a.GetRussiaDirect(), nil
 }
 
 // CheckExclude возвращает нормализованное значение или текст ошибки — для подсказки в поле ввода.

@@ -39,8 +39,8 @@ desktop.ini
 
 # Logs
 *.log
-build/bin/
-build/backup/
+build/bin.noindex/
+build/backup.noindex/
 build/uwdt.iconset/
 .claude/
 build/windows/winres/

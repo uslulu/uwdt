@@ -409,6 +409,9 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 	w.activeRoutes = tunnelRoutes
 
 	logf(fmt.Sprintf("Туннель %s поднят, AllowedIPs: %v", wgIface, tunnelRoutes))
+	if russiaDirectEnabled() {
+		go w.RefreshExcludes(logf) // ~9 тыс. сетей — пачкой через API, после подъёма туннеля
+	}
 	return nil
 }
 
@@ -429,17 +432,29 @@ func (w *WG) teardownWindowsLocked() {
 	}
 	w.activeUserExcludes = nil
 
+	if w.physGW != "" && len(w.activeExcludeRoutes) > 0 {
+		if _, err := bulkRoutes(false, w.physGW, w.activeExcludeRoutes); err != nil {
+			for _, cidr := range w.activeExcludeRoutes {
+				if ip, _, _ := parseCIDR(cidr); ip != "" {
+					_ = runCmdWindows("route", "delete", ip)
+				}
+			}
+		}
+		w.activeExcludeRoutes = nil
+	}
+
 	// Restore physical gateway metric (must happen BEFORE closing WG device)
 	if w.physGW != "" {
 		_ = runCmdWindows("route", "change", "0.0.0.0", "mask", "0.0.0.0", w.physGW, "metric", "35")
 		w.physGW = ""
 	}
 
-	// Delete exclude routes
-	for _, cidr := range w.activeExcludeRoutes {
-		ip, _, _ := parseCIDR(cidr)
-		if ip != "" {
-			_ = runCmdWindows("route", "delete", ip)
+	// Delete exclude routes — пачкой через API (их могут быть тысячи); fallback на route.exe
+	if w.physGW == "" {
+		for _, cidr := range w.activeExcludeRoutes {
+			if ip, _, _ := parseCIDR(cidr); ip != "" {
+				_ = runCmdWindows("route", "delete", ip)
+			}
 		}
 	}
 	w.activeExcludeRoutes = nil
@@ -466,7 +481,7 @@ func (w *WG) teardownWindowsLocked() {
 // refreshExcludesWindows применяет правку списка исключений к поднятому туннелю.
 // Приложение на Windows запущено с правами администратора — route работает напрямую.
 func (w *WG) refreshExcludesWindows(logf wgLogFunc) {
-	next := currentUserExcludes(logf)
+	next := currentAllExcludes(logf)
 
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
@@ -485,24 +500,25 @@ func (w *WG) refreshExcludesWindows(logf wgLogFunc) {
 	}
 	add, del := diffCIDRs(w.activeUserExcludes, next)
 	changed := 0
+	var toDel, toAdd []string
 	for _, c := range del {
-		if builtin[c] {
-			continue
-		}
-		if ip, mask, err := parseCIDR(c); err == nil {
-			_ = runCmdWindows("route", "delete", ip, "mask", mask)
-			changed++
+		if !builtin[c] {
+			toDel = append(toDel, c)
 		}
 	}
 	for _, c := range add {
-		if builtin[c] {
-			continue
-		}
-		if ip, mask, err := parseCIDR(c); err == nil {
-			_ = runCmdWindows("route", "add", ip, "mask", mask, w.physGW)
-			changed++
+		if !builtin[c] {
+			toAdd = append(toAdd, c)
 		}
 	}
+	if _, err := bulkRoutes(false, w.physGW, toDel); err != nil && len(toDel) > 0 {
+		logf("Снятие исключений: " + err.Error())
+	}
+	if _, err := bulkRoutes(true, w.physGW, toAdd); err != nil && len(toAdd) > 0 {
+		logf("Добавление исключений: " + err.Error())
+		return
+	}
+	changed = len(toDel) + len(toAdd)
 	if changed == 0 {
 		return
 	}

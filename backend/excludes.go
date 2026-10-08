@@ -154,6 +154,43 @@ func currentUserExcludes(logf wgLogFunc) []string {
 	return resolveExcludes(f(), logf)
 }
 
+// «Россия напрямую» — флаг из настроек (задаётся App при старте)
+var (
+	russiaSourceMu sync.Mutex
+	russiaSource   func() bool
+)
+
+func SetRussiaDirectSource(f func() bool) {
+	russiaSourceMu.Lock()
+	russiaSource = f
+	russiaSourceMu.Unlock()
+}
+
+func russiaDirectEnabled() bool {
+	russiaSourceMu.Lock()
+	f := russiaSource
+	russiaSourceMu.Unlock()
+	return f != nil && f()
+}
+
+// currentAllExcludes — пользовательский список плюс российские сети, если включено.
+func currentAllExcludes(logf wgLogFunc) []string {
+	list := currentUserExcludes(logf)
+	if !russiaDirectEnabled() {
+		return list
+	}
+	seen := make(map[string]bool, len(list))
+	for _, c := range list {
+		seen[c] = true
+	}
+	for _, c := range russiaNets(logf) {
+		if !seen[c] {
+			list = append(list, c)
+		}
+	}
+	return list
+}
+
 // diffCIDRs возвращает, что добавить и что убрать, чтобы из old получить new.
 func diffCIDRs(old, new []string) (add, del []string) {
 	o := map[string]bool{}
