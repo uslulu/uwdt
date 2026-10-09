@@ -19,6 +19,7 @@ type Bridge struct {
 	running bool
 	logFile *LogFile // полный лог сессии
 	stage   stageTracker
+	health  sessionHealth
 	session uint64   // номер сессии; stale forwardEvents не должен трогать новую
 }
 
@@ -38,6 +39,7 @@ func (b *Bridge) Connect(params ConnectParams) error {
 	b.running = true
 	b.session++
 	b.stage = stageTracker{}
+	b.health = sessionHealth{}
 	sessID := b.session
 	b.mu.Unlock()
 
@@ -76,6 +78,8 @@ func (b *Bridge) Connect(params ConnectParams) error {
 		TurnTCP:     params.TurnTCP,
 	}
 
+	// Новое подключение — с чистого листа: без прошлых банов TURN и протухших кредов
+	core.ResetSessionState()
 	c := core.New(cfg)
 	
 	b.mu.Lock()
@@ -99,6 +103,7 @@ func (b *Bridge) Connect(params ConnectParams) error {
 	}
 
 	go b.forwardEvents(events, sessID)
+	go b.watchdog(sessID)
 	return nil
 }
 
@@ -106,6 +111,11 @@ func (b *Bridge) Disconnect() {
 	b.mu.Lock()
 	c := b.core
 	b.mu.Unlock()
+
+	b.mu.Lock()
+	b.health = sessionHealth{}
+	b.mu.Unlock()
+	b.onEvent("degraded", false)
 
 	// Tear down WireGuard interface immediately — don't wait for core shutdown
 	wg.Teardown()
@@ -165,6 +175,7 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 			}
 
 		case core.EventStats:
+			b.noteStats(ev.Active)
 			b.onEvent("stats", map[string]any{
 				"active":     ev.Active,
 				"bytes_up":   ev.BytesUp,
@@ -193,6 +204,7 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 				if err := wg.Apply(ev.Data, ev.TurnIPs, wgLogf); err != nil {
 					b.onEvent("error", fmt.Sprintf("[WG] Ошибка: %v", err))
 				} else {
+					b.noteTunnelUp()
 					b.onEvent("log", "INFO", "[WG] Конфиг применён, туннель активен")
 					b.onEvent("state_changed", "connected")
 				}

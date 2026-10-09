@@ -17,3 +17,5 @@ func cleanupStaleExcludeRoutesDarwin(_ wgLogFunc) {}
 func (w *WG) refreshExcludesDarwin(logf wgLogFunc) {
 	logf("Исключения сохранены — применятся при следующем подключении")
 }
+
+func (w *WG) setTunnelRoutesDarwin(_ bool) error { return nil }

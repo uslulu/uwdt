@@ -100,6 +100,35 @@ func (w *WG) RefreshExcludes(logf wgLogFunc) {
 	}
 }
 
+// SetTunnelRoutes снимает (false) или возвращает (true) маршруты туннеля, не
+// разрывая его: если каналы к серверу пропали, интернет идёт напрямую, а не в
+// пустой туннель.
+func (w *WG) SetTunnelRoutes(on bool) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return w.setTunnelRoutesDarwin(on)
+	case "windows":
+		return w.setTunnelRoutesWindows(on)
+	}
+	return nil
+}
+
+func (w *WG) setTunnelRoutesWindows(on bool) error {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if w.activeDevice == nil {
+		return fmt.Errorf("туннель не поднят")
+	}
+	for _, cidr := range w.activeRoutes {
+		if on {
+			_ = runCmdWindows("netsh", "interface", "ip", "add", "route", cidr, wgIface)
+		} else {
+			_ = runCmdWindows("netsh", "interface", "ip", "delete", "route", cidr, wgIface)
+		}
+	}
+	return nil
+}
+
 func (w *WG) Teardown() {
 	switch runtime.GOOS {
 	case "linux":

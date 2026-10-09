@@ -270,6 +270,21 @@ func (w *WG) refreshExcludesDarwin(logf wgLogFunc) {
 	logf(fmt.Sprintf("Исключения обновлены: +%d −%d", len(add), len(del)))
 }
 
+// setTunnelRoutesDarwin снимает или возвращает маршруты туннеля через helper (без пароля).
+func (w *WG) setTunnelRoutesDarwin(on bool) error {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if w.helperConn == nil {
+		return fmt.Errorf("туннель не поднят")
+	}
+	cmd := "tunoff\n"
+	if on {
+		cmd = "tunon\n"
+	}
+	_, err := w.helperConn.Write([]byte(cmd))
+	return err
+}
+
 // routeGetDarwin — что macOS выберет для адреса: назначение, маска, шлюз, интерфейс.
 func routeGetDarwin(args ...string) (dst, mask, gw, iface string) {
 	out, err := exec.Command("route", append([]string{"-n", "get"}, args...)...).Output()
@@ -599,6 +614,16 @@ func RunWGHelperDarwin(args []string) {
 		}
 		if len(f) == 2 && (f[0] == "add" || f[0] == "del") {
 			g.apply(f[0], f[1])
+		}
+		// Туннель без связи: снять/вернуть его маршруты, чтобы интернет шёл напрямую
+		if len(f) == 1 && (f[0] == "tunoff" || f[0] == "tunon") {
+			op := "add"
+			if f[0] == "tunoff" {
+				op = "delete"
+			}
+			for _, cidr := range splitCSV(*tunnels) {
+				_ = runCmdDarwin("route", "-q", "-n", op, "-net", cidr, "-interface", name)
+			}
 		}
 		if err != nil {
 			break

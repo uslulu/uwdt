@@ -12,7 +12,7 @@ import { tunnelStore } from './lib/stores/tunnelStore';
 import type { LogLevel } from './lib/stores/logStore';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { statsStore, sessionClock } from './lib/stores/statsStore';
-import { stageStore } from './lib/stores/stageStore';
+import { stageStore, degradedStore } from './lib/stores/stageStore';
 import { CheckUpdate } from '../wailsjs/go/backend/App';
 
 function useWdttPaste() {
@@ -49,10 +49,14 @@ function useWailsEvents() {
         const s = String(status ?? '');
         if (s === 'connected' || s === 'running') { sessionClock.start(); tunnelStore.set('connected'); stageStore.set(''); logStore.push('INFO', '✓ Туннель активен'); }
         else if (s === 'connecting') { sessionClock.stop(); tunnelStore.set('connecting'); statsStore.reset(); stageStore.set('Запускаю подключение…'); logStore.clear(); logStore.push('INFO', '⟳ Подключение...'); }
-        else if (s === 'stopped' || s === 'error' || s === 'disconnected') { sessionClock.stop(); tunnelStore.set('idle'); statsStore.reset(); stageStore.set(''); logStore.push('INFO', '— Отключено'); }
+        else if (s === 'stopped' || s === 'error' || s === 'disconnected') { sessionClock.stop(); degradedStore.set(false); tunnelStore.set('idle'); statsStore.reset(); stageStore.set(''); logStore.push('INFO', '— Отключено'); }
       }),
       EventsOn('event', (name: unknown) => {
         if (name === 'wg_config') { sessionClock.start(); tunnelStore.set('connected'); }
+      }),
+      EventsOn('degraded', (v: unknown) => {
+        degradedStore.set(v === true);
+        if (v === true) toastStore.show('Нет связи с серверами ВК — интернет пока напрямую, восстанавливаю', 6000);
       }),
       EventsOn('stage', (text: unknown) => {
         if (tunnelStore.get() === 'connecting') stageStore.set(String(text ?? ''));

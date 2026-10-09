@@ -19,7 +19,7 @@ import type { Server, TunnelState } from '../lib/types';
 import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles } from '../../wailsjs/go/backend/App';
 import Bubble from '../components/Bubble';
 import { statsStore, formatRate, formatDuration, sessionClock, type TunnelStats } from '../lib/stores/statsStore';
-import { stageStore } from '../lib/stores/stageStore';
+import { stageStore, degradedStore } from '../lib/stores/stageStore';
 import { IconArrowDown, IconArrowUp, IconPlugConnected, IconClock } from '@tabler/icons-react';
 import './Connect.css';
 
@@ -261,6 +261,9 @@ export default function Connect() {
   useEffect(() => statsStore.subscribe(setStats), []);
   const [stage, setStage] = useState('');
   useEffect(() => stageStore.subscribe(setStage), []);
+  const [degraded, setDegraded] = useState(false);
+  useEffect(() => degradedStore.subscribe(setDegraded), []);
+  const shownState: TunnelState = tunnelState === 'connected' && degraded ? 'connecting' : tunnelState;
 
 
   const selectedRef = useRef(selected);
@@ -441,15 +444,16 @@ export default function Connect() {
 
         <div className="hero">
           <PowerButton
-            tunnelState={tunnelState}
+            tunnelState={shownState}
             linkFlash={linkFlash}
             selected={selected}
             onTunnel={handleTunnel}
           />
-          <div className="hero-title">{selected ? STATUS_TITLE[tunnelState] : 'Нет серверов'}</div>
+          <div className="hero-title">{!selected ? 'Нет серверов' : degraded && tunnelState === 'connected' ? 'Восстанавливаю связь…' : STATUS_TITLE[tunnelState]}</div>
           <div className="hero-sub">
             {!selected ? 'Добавьте сервер кнопкой «+»'
               : tunnelState === 'idle' ? 'Нажмите на пузырь, чтобы подключиться'
+              : degraded && tunnelState === 'connected' ? <span className="hero-stage">Нет связи с серверами ВК — интернет пока напрямую</span>
               : tunnelState === 'connecting' && stage ? <span key={stage} className="hero-stage">{stage}</span>
               : selected.name}
           </div>

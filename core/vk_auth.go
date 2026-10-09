@@ -794,3 +794,13 @@ func isWebViewCaptchaTimeout(err error) bool {
 func GetCreds(ctx context.Context, link string, streamID int) (string, string, []string, error) {
 	return getVkCredsCached(ctx, link, streamID)
 }
+
+// ResetSessionState забывает «забаненные» TURN-адреса и закэшированные учётные
+// данные VK. Вызывать перед новым подключением и после сна: за ночь всё это
+// протухает, а без сброса воркеры засыпают на минуту и берут мёртвые креды.
+func ResetSessionState() {
+	GlobalBlacklist.Clear()
+	credentialsStore.mu.Lock()
+	credentialsStore.caches = make(map[int]*StreamCredentialsCache)
+	credentialsStore.mu.Unlock()
+}
