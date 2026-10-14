@@ -24,6 +24,15 @@ export const PRESET_GROUPS: { title: string; presets: Preset[] }[] = [
       { label: 'Авито', values: ['AS201012'] },
       { label: 'Okko', values: ['AS211609'] },
       { label: 'ivi', values: ['AS57629'] },
+      // Apple сверяет страну аккаунта с адресом: через туннель песни не включаются («Invalid store»)
+      {
+        label: 'Apple Music',
+        values: [
+          'AS714', 'music.apple.com', 'play.itunes.apple.com', 'init.itunes.apple.com', 'bag.itunes.apple.com',
+          'amp-api.music.apple.com', 'api.music.apple.com', 'audio-ssl.itunes.apple.com', 'se.itunes.apple.com',
+          'su.itunes.apple.com',
+        ],
+      },
     ],
   },
   {
