@@ -20,6 +20,9 @@ const (
 	// sleepWhenAllBanned — сколько спим, если все адреса забанены
 	sleepWhenAllBanned = 60 * time.Second
 
+	// sleepWhenNetworkDown — пауза, пока у нас самих нет сети
+	sleepWhenNetworkDown = 3 * time.Second
+
 	// sleepAfterAddressDead — спим после того как адрес умер (перед переходом к следующему)
 	sleepAfterAddressDead = 500 * time.Millisecond
 
@@ -382,6 +385,15 @@ func WorkerGroup(
 						refreshMu.Unlock()
 						select {
 						case <-time.After(2 * time.Second):
+						case <-ctx.Done():
+							return
+						}
+						continue
+
+					case SessionErrorNetwork:
+						// Сети нет — ждём её, адрес не баним
+						select {
+						case <-time.After(sleepWhenNetworkDown):
 						case <-ctx.Done():
 							return
 						}

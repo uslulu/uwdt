@@ -3,12 +3,14 @@ package core
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cbeuw/connutil"
@@ -67,7 +69,35 @@ const (
 	SessionErrorAuth SessionErrorType = "AUTH"
 	// FATAL — невосстановимая ошибка (FATAL_AUTH, хеш мёртв и т.д.)
 	SessionErrorFatal SessionErrorType = "FATAL"
+	// NETWORK — у нас нет сети (мак только проснулся, Wi-Fi переподключается):
+	// адрес не виноват, баним ничего и повторяем через пару секунд
+	SessionErrorNetwork SessionErrorType = "NETWORK"
 )
+
+// isNetworkDown — ошибка говорит о нашей сети, а не о TURN-сервере.
+func isNetworkDown(err error) bool {
+	if errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.ENETDOWN) ||
+		errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.EADDRNOTAVAIL) {
+		return true
+	}
+	// pion/turn: «failed to retransmit transaction», «all retransmissions failed»
+	return strings.Contains(strings.ToLower(err.Error()), "retransmi")
+}
+
+// liveSessions — отмена каждой живой сессии, чтобы после сна разом бросить
+// мёртвые TCP-соединения к TURN вместо того, чтобы ждать broken pipe по одному.
+var liveSessions sync.Map // *int → context.CancelFunc
+
+// DropSessions обрывает все живые сессии; воркеры тут же поднимают новые.
+func DropSessions() int {
+	n := 0
+	liveSessions.Range(func(_, v any) bool {
+		v.(context.CancelFunc)()
+		n++
+		return true
+	})
+	return n
+}
 
 // SessionError — структурированная ошибка сессии
 type SessionError struct {
@@ -132,6 +162,9 @@ func RunSession(
 
 	turnConn, err := dialTURNConn(turnAddrResolved, tp.TCPTransport)
 	if err != nil {
+		if isNetworkDown(err) {
+			return false, &SessionError{Type: SessionErrorNetwork, Address: turnAddr, Err: err}
+		}
 		return false, &SessionError{
 			Type:    SessionErrorAddressDead,
 			Address: turnAddr,
@@ -206,6 +239,14 @@ func RunSession(
 			}
 		}
 
+		if isNetworkDown(err) {
+			return false, &SessionError{
+				Type:    SessionErrorNetwork,
+				Address: turnAddr,
+				Err:     fmt.Errorf("TURN Allocate: %w", err),
+			}
+		}
+
 		// Квота, unreachable, timeout — всё это "адрес мёртв"
 		if strings.Contains(errLower, "quota") ||
 			strings.Contains(errLower, "486") ||
@@ -248,6 +289,11 @@ func RunSession(
 	pipeA, pipeB := connutil.AsyncPacketPipe()
 
 	sessCtx, sessCancel := context.WithCancel(ctx)
+	sessKey := new(int)
+	liveSessions.Store(sessKey, sessCancel)
+	defer liveSessions.Delete(sessKey)
+	// dropped — сессию оборвал DropSessions, а не ошибка: воркер просто переподключится
+	dropped := func() bool { return sessCtx.Err() != nil && ctx.Err() == nil }
 	// ВАЖНО: defer sessCancel() регистрируется НИЖЕ, рядом с defer stopRelay().
 	// Defers работают LIFO, и sessCancel обязан выполниться первым — иначе
 	// stopRelay снимет AfterFunc до его срабатывания, дедлайны не выставятся,
@@ -368,6 +414,9 @@ func RunSession(
 	select {
 	case handshakeSem <- struct{}{}:
 	case <-sessCtx.Done():
+		if dropped() {
+			return false, nil
+		}
 		return false, &SessionError{
 			Type:    SessionErrorFatal,
 			Address: turnAddr,
@@ -400,6 +449,9 @@ func RunSession(
 	hcancel()
 	<-handshakeSem
 
+	if err != nil && dropped() {
+		return false, nil
+	}
 	if err != nil {
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "deadline") || strings.Contains(errStr, "timeout") {

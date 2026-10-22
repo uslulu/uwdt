@@ -4,6 +4,7 @@ package backend
 // забирать трафик в пустоту. Каналов нет дольше deadAfter — маршруты туннеля
 // снимаются (интернет напрямую), ядро забывает протухшие креды и баны TURN и
 // поднимает каналы заново; каналы вернулись — маршруты туннеля возвращаются.
+// После сна все каналы рвутся сразу: их TCP к TURN мертвы.
 
 import (
 	"fmt"
@@ -66,7 +67,10 @@ func (b *Bridge) watchdog(sessID uint64) {
 			h.lastResetAt = now
 			b.mu.Unlock()
 			core.ResetSessionState()
-			b.log(fmt.Sprintf("[СТОРОЖ] Мак спал %s — обновляю доступ к серверам ВК", gap.Round(time.Minute)))
+			// TCP-соединения к TURN за время сна умерли, но выглядят живыми, пока
+			// запись в них не упадёт; трафик тем временем уходит в пустоту
+			dropped := core.DropSessions()
+			b.log(fmt.Sprintf("[СТОРОЖ] Мак спал %s — переподключаю каналы (%d)", gap.Round(time.Minute), dropped))
 			continue
 		}
 		up, deg, act := h.tunnelUp, h.degraded, h.active
