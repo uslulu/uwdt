@@ -348,3 +348,22 @@ func TestToHex(t *testing.T) {
 		t.Errorf("ToHex(invalid): got %q, want original", got)
 	}
 }
+
+func TestParseWGDNS(t *testing.T) {
+	conf := "[Interface]\nAddress = 10.0.0.2/32\nDNS = 10.0.0.1, fd00::1, corp.local\n"
+	if got := backend.ParseWGDNS(conf); len(got) != 1 || got[0] != "10.0.0.1" {
+		t.Errorf("ParseWGDNS = %v, want [10.0.0.1]", got)
+	}
+	// без DNS в конфиге — запасные, и они не должны попадать в обход туннеля
+	got := backend.ParseWGDNS("[Interface]\nAddress = 10.0.0.2/32\n")
+	if len(got) == 0 {
+		t.Fatal("нет DNS по умолчанию")
+	}
+	for _, ip := range got {
+		for _, bad := range []string{"1.1.1.", "8.8.8.", "77.88."} {
+			if strings.HasPrefix(ip, bad) {
+				t.Errorf("DNS по умолчанию %s идёт мимо туннеля", ip)
+			}
+		}
+	}
+}

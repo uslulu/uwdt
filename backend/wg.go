@@ -158,6 +158,31 @@ var vkExcludeCIDRs = []string{
 	"77.88.0.0/18", "8.8.8.0/24", "1.1.1.0/24",
 }
 
+// tunnelDNSDefault — DNS, если сервер не прислал свой. Оба адреса не входят во
+// встроенные исключения (1.1.1.0/24 и 8.8.8.0/24 идут мимо туннеля), значит
+// запросы к ним идут через туннель и провайдер их не подменит.
+var tunnelDNSDefault = []string{"1.0.0.1", "8.8.4.4"}
+
+// parseWGDNS — IPv4-адреса из строки DNS = … конфига (имена поиска пропускаем).
+func parseWGDNS(conf string) []string {
+	var out []string
+	for _, line := range strings.Split(conf, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "=", 2)
+		if len(parts) != 2 || !strings.EqualFold(strings.TrimSpace(parts[0]), "dns") {
+			continue
+		}
+		for _, v := range strings.Split(parts[1], ",") {
+			if ip := net.ParseIP(strings.TrimSpace(v)); ip != nil && ip.To4() != nil {
+				out = append(out, ip.String())
+			}
+		}
+	}
+	if len(out) == 0 {
+		return tunnelDNSDefault
+	}
+	return out
+}
+
 func parseWGConfig(conf string) (addr, mtu string, allowedIPs []string, wgConf string) {
 	var out strings.Builder
 	scanner := bufio.NewScanner(strings.NewReader(conf))
@@ -334,7 +359,10 @@ func localDNSServers() []string {
 var wintunDLLData []byte
 
 // InitWintun устанавливает wintun.dll (вызывается из main_windows.go).
-func InitWintun(dll []byte) { wintunDLLData = dll }
+func InitWintun(dll []byte) {
+	wintunDLLData = dll
+	go clearTunnelDNSWindows() // правило DNS от аварийно оборванного сеанса
+}
 
 func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 	w.stateMu.Lock()
@@ -441,6 +469,7 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 		tunnelRoutes = append(tunnelRoutes, cidr)
 	}
 	w.activeRoutes = tunnelRoutes
+	setTunnelDNSWindows(tunDev, parseWGDNS(conf), logf)
 
 	logf(fmt.Sprintf("Туннель %s поднят, AllowedIPs: %v", wgIface, tunnelRoutes))
 	go w.RefreshExcludes(logf) // свежие домены, AS и «Россия» — пачкой через API, после подъёма туннеля
@@ -457,6 +486,7 @@ func (w *WG) teardownWindowsLocked() {
 	if w.activeDevice == nil && w.activeTun == nil {
 		return
 	}
+	clearTunnelDNSWindows()
 
 	if w.refreshStop != nil {
 		close(w.refreshStop)
@@ -691,6 +721,8 @@ func parseCIDR(cidr string) (ip, mask string, err error) {
 func ParseWGConfig(conf string) (addr, mtu string, allowedIPs []string, wgConf string) {
 	return parseWGConfig(conf)
 }
+
+func ParseWGDNS(conf string) []string { return parseWGDNS(conf) }
 
 func LocalDNSServers() []string {
 	return localDNSServers()
