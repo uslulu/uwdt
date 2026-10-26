@@ -40,6 +40,15 @@ func setTunnelDNSWindows(dev tun.Device, servers []string, logf wgLogFunc) {
 	if err := luid.SetDNS(windows.AF_INET, addrs, nil); err != nil {
 		logf("DNS на интерфейсе туннеля: " + err.Error())
 	}
+	// Сервер может прислать DNS из встроенных исключений (1.1.1.1 ∈ 1.1.1.0/24):
+	// тогда запросы шли бы мимо туннеля, а провайдер подменял бы ответы.
+	// Маршрут /32 в туннель точнее исключения и перебивает его; уходит вместе с адаптером
+	for _, a := range addrs {
+		if err := luid.AddRoute(netip.PrefixFrom(a, 32), netip.IPv4Unspecified(), 0); err != nil &&
+			err != windows.ERROR_OBJECT_ALREADY_EXISTS {
+			logf("Маршрут DNS " + a.String() + " в туннель: " + err.Error())
+		}
+	}
 
 	clearNRPT()
 	if err := powershell("Add-DnsClientNrptRule -Namespace '.' -NameServers " + strings.Join(quoted, ",") +
