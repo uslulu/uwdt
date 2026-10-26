@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import Connect from './pages/Connect';
@@ -13,7 +13,6 @@ import type { LogLevel } from './lib/stores/logStore';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { statsStore, sessionClock } from './lib/stores/statsStore';
 import { stageStore, degradedStore } from './lib/stores/stageStore';
-import { CheckUpdate } from '../wailsjs/go/backend/App';
 
 function useWdttPaste() {
   useEffect(() => {
@@ -72,28 +71,19 @@ function useWailsEvents() {
   }, []);
 }
 
-// Повтор при ошибке сети — через 5 минут, плановая проверка — раз в 6 часов
-const RETRY_MS = 5 * 60 * 1000;
-const PERIODIC_MS = 6 * 60 * 60 * 1000;
+// Обновления ищет Go (раз в час и после сна) и присылает событие update_available:
+// таймеры страницы macOS замораживает, пока окно свёрнуто в трей
+type UpdateView = { version: string; body: string; url: string; page: string };
 
 function useUpdateChecker() {
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; url: string; page: string } | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateView | null>(null);
 
   useEffect(() => {
-    const check = () => {
-      CheckUpdate().then(info => {
-        if (info.available) {
-          setUpdateInfo({ version: info.version, body: info.body, url: info.url, page: info.page });
-        } else {
-          timerRef.current = setTimeout(check, PERIODIC_MS);
-        }
-      }).catch(() => {
-        timerRef.current = setTimeout(check, RETRY_MS);
-      });
+    const show = (info: { available: boolean; version: string; body: string; url: string; page: string }) => {
+      if (info?.available) setUpdateInfo({ version: info.version, body: info.body, url: info.url, page: info.page });
     };
-    check();
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    const off = EventsOn('update_available', (info: unknown) => show(info as Parameters<typeof show>[0]));
+    return () => off();
   }, []);
 
   return { updateInfo, closeUpdate: () => setUpdateInfo(null) };
