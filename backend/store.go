@@ -107,6 +107,23 @@ func (s *Store) LoadProfile(name string) (*ProfileData, error) {
 	return &p, nil
 }
 
+// DeviceID — постоянный ID этой установки UWDT. Сервер выдаёт WireGuard-пир
+// по device_id: без него все устройства приходили как «unknown» и делили
+// один пир — ответы сервера уходили то на мак, то на Windows.
+func (s *Store) DeviceID() string {
+	path := filepath.Join(s.baseDir, "device_id")
+	if data, err := os.ReadFile(path); err == nil {
+		if id := strings.TrimSpace(string(data)); id != "" {
+			return id
+		}
+	}
+	id := uuid.New().String()
+	if err := atomicWrite(path, []byte(id)); err != nil {
+		return "unknown"
+	}
+	return id
+}
+
 // SaveProfile сохраняет профиль сервера (атомарно).
 func (s *Store) SaveProfile(name string, p ProfileData) error {
 	name = sanitizeProfileName(name)

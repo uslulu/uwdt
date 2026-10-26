@@ -403,3 +403,14 @@ var (
 	_ = backend.ProfileData{}
 	_ = backend.AppSettings{}
 )
+
+func TestDeviceID_StablePerInstall(t *testing.T) {
+	s := newTestStore(t)
+	id := s.DeviceID()
+	if id == "" || id == "unknown" {
+		t.Fatalf("DeviceID = %q, нужен настоящий UUID", id)
+	}
+	if again := backend.NewStore().DeviceID(); again != id {
+		t.Errorf("DeviceID поменялся между запусками: %q → %q", id, again)
+	}
+}

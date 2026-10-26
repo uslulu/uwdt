@@ -64,7 +64,7 @@ func (b *Bridge) Connect(params ConnectParams) error {
 
 	deviceID := params.DeviceID
 	if deviceID == "" {
-		deviceID = "unknown"
+		deviceID = b.store.DeviceID()
 	}
 
 	cfg := core.Config{
