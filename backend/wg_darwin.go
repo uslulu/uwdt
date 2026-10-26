@@ -62,28 +62,6 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 		fmt.Sscanf(mtuStr, "%d", &mtu)
 	}
 
-	// Exclude-маршруты — через физический gateway, мимо туннеля
-	var excludes []string
-	for _, ip := range turnIPs {
-		excludes = append(excludes, ip+"/32")
-	}
-	excludes = append(excludes, vkExcludeCIDRs...)
-	for _, dns := range localDNSServers() {
-		// DNS, который уже ходит через другой VPN (Cisco и т.п.), не трогаем:
-		// иначе запросы к нему уйдут мимо того VPN и начнут таймаутить
-		if iface := routeIfaceDarwin(dns); strings.HasPrefix(iface, "utun") {
-			logf(fmt.Sprintf("DNS %s обслуживает %s — оставляю ему", dns, iface))
-			continue
-		}
-		excludes = append(excludes, dns+"/32")
-	}
-	// Пользовательские исключения и «Россия» — из кэша, без DNS; ставятся helper'ом
-	// одним пакетом ДО туннельных маршрутов, чтобы их трафик ни на миг не ушёл в туннель
-	userExcludes := currentAllExcludesFast(logf)
-	if len(userExcludes) > 0 {
-		logf(fmt.Sprintf("Исключений из туннеля: %d", len(userExcludes)))
-	}
-
 	// Туннельные маршруты: полный дефолт заменяем на split-default,
 	// чтобы не трогать физический default route
 	var tunnels []string
@@ -95,53 +73,11 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 		}
 	}
 
-	// Сокет, на который выйдет helper
-	sockDir, err := os.MkdirTemp("", "pwdtt-wg-")
+	h, err := startTunHelperDarwin(addr, mtu, turnIPs, tunnels, logf)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(sockDir)
-	sock := filepath.Join(sockDir, "h.sock")
-	exclFile := filepath.Join(sockDir, "exclude.txt")
-	if err := os.WriteFile(exclFile, []byte(strings.Join(userExcludes, "\n")), 0o644); err != nil {
-		return err
-	}
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
-	if err != nil {
-		return err
-	}
-
-	exe, err := os.Executable()
-	if err != nil {
-		ln.Close()
-		return err
-	}
-
-	shellCmd := fmt.Sprintf("%s --wg-helper -sock %s -addr %s -mtu %d -exclude %s -exclude-file %s -tunnel %s >/dev/null 2>&1 &",
-		shellQuote(exe), shellQuote(sock), shellQuote(addr), mtu,
-		shellQuote(strings.Join(excludes, ",")), shellQuote(exclFile), shellQuote(strings.Join(tunnels, ",")))
-	osa := fmt.Sprintf("do shell script %q with administrator privileges", shellCmd)
-
-	logf("Запрос прав администратора для настройки туннеля…")
-	if out, err := exec.Command("osascript", "-e", osa).CombinedOutput(); err != nil {
-		ln.Close()
-		return fmt.Errorf("права администратора не получены: %w — %s", err, strings.TrimSpace(string(out)))
-	}
-
-	ln.SetDeadline(time.Now().Add(30 * time.Second))
-	hconn, err := ln.AcceptUnix()
-	ln.Close()
-	if err != nil {
-		return fmt.Errorf("helper не вышел на связь: %w", err)
-	}
-
-	tunFile, utunName, err := recvTunFD(hconn, logf)
-	if err != nil {
-		hconn.Close()
-		return err
-	}
-	hconn.SetReadDeadline(time.Time{})
-	logf(fmt.Sprintf("Интерфейс %s получен от helper", utunName))
+	tunFile, utunName, hconn := h.file, h.name, h.conn
 
 	tunDev, err := tun.CreateTUNFromFile(tunFile, 0) // mtu уже выставлен helper'ом
 	if err != nil {
@@ -172,20 +108,146 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 	w.stateMu.Lock()
 	w.activeTun = tunDev
 	w.activeDevice = dev
-	w.helperConn = hconn
-	w.activeExcludeRoutes = excludes
-	w.activeUserExcludes = userExcludes
-	w.refreshStop = make(chan struct{})
-	go w.excludeRefreshLoop(w.refreshStop, logf)
-	w.activeRoutesMu.Lock()
-	w.activeRoutes = tunnels
-	w.activeRoutesMu.Unlock()
+	w.setDarwinStateLocked(h, tunnels, logf)
 	w.stateMu.Unlock()
 
 	logf(fmt.Sprintf("Туннель %s поднят, маршруты: %v", utunName, tunnels))
 	// Свежие адреса доменов, сети AS и «Россия» — в фоне, через helper
 	go w.RefreshExcludes(logf)
 	return nil
+}
+
+// xrayTunAddr — адрес нашего конца utun в режиме Xray: сам Xray его не использует,
+// но интерфейсу macOS нужен IPv4, чтобы на него можно было повесить маршруты
+const xrayTunAddr = "10.255.255.1/32"
+
+const xrayMTU = 1400
+
+func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) error {
+	w.teardownDarwin()
+
+	tunnels := []string{"0.0.0.0/1", "128.0.0.0/1"}
+	h, err := startTunHelperDarwin(xrayTunAddr, xrayMTU, serverIPs, tunnels, logf)
+	if err != nil {
+		return err
+	}
+
+	logf("Запуск Xray…")
+	x, err := startXray(link, h.file.Fd(), xrayMTU, logf)
+	if err != nil {
+		h.file.Close()
+		h.conn.Close()
+		return err
+	}
+
+	w.stateMu.Lock()
+	w.activeXray = x
+	w.activeTunFile = h.file
+	w.setDarwinStateLocked(h, tunnels, logf)
+	w.stateMu.Unlock()
+
+	logf(fmt.Sprintf("Туннель %s (Xray) поднят, маршруты: %v", h.name, tunnels))
+	go w.RefreshExcludes(logf)
+	return nil
+}
+
+// tunHelper — интерфейс от root-помощника: fd utun, его имя, связь с помощником
+// и применённые им исключения.
+type tunHelper struct {
+	file         *os.File
+	name         string
+	conn         *net.UnixConn
+	excludes     []string // все исключения (встроенные + пользовательские)
+	userExcludes []string
+}
+
+// startTunHelperDarwin запрашивает пароль администратора, запускает helper,
+// который создаёт utun с адресом addr, ставит исключения (directIPs, VK, DNS,
+// пользовательские и «Россия») и маршруты tunnels, и получает fd интерфейса.
+// Общий для WireGuard и Xray.
+func startTunHelperDarwin(addr string, mtu int, directIPs, tunnels []string, logf wgLogFunc) (*tunHelper, error) {
+	// Exclude-маршруты — через физический gateway, мимо туннеля
+	var excludes []string
+	for _, ip := range directIPs {
+		excludes = append(excludes, ip+"/32")
+	}
+	excludes = append(excludes, vkExcludeCIDRs...)
+	for _, dns := range localDNSServers() {
+		// DNS, который уже ходит через другой VPN (Cisco и т.п.), не трогаем:
+		// иначе запросы к нему уйдут мимо того VPN и начнут таймаутить
+		if iface := routeIfaceDarwin(dns); strings.HasPrefix(iface, "utun") {
+			logf(fmt.Sprintf("DNS %s обслуживает %s — оставляю ему", dns, iface))
+			continue
+		}
+		excludes = append(excludes, dns+"/32")
+	}
+	// Пользовательские исключения и «Россия» — из кэша, без DNS; ставятся helper'ом
+	// одним пакетом ДО туннельных маршрутов, чтобы их трафик ни на миг не ушёл в туннель
+	userExcludes := currentAllExcludesFast(logf)
+	if len(userExcludes) > 0 {
+		logf(fmt.Sprintf("Исключений из туннеля: %d", len(userExcludes)))
+	}
+
+	// Сокет, на который выйдет helper
+	sockDir, err := os.MkdirTemp("", "pwdtt-wg-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(sockDir)
+	sock := filepath.Join(sockDir, "h.sock")
+	exclFile := filepath.Join(sockDir, "exclude.txt")
+	if err := os.WriteFile(exclFile, []byte(strings.Join(userExcludes, "\n")), 0o644); err != nil {
+		return nil, err
+	}
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	if err != nil {
+		return nil, err
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+
+	shellCmd := fmt.Sprintf("%s --wg-helper -sock %s -addr %s -mtu %d -exclude %s -exclude-file %s -tunnel %s >/dev/null 2>&1 &",
+		shellQuote(exe), shellQuote(sock), shellQuote(addr), mtu,
+		shellQuote(strings.Join(excludes, ",")), shellQuote(exclFile), shellQuote(strings.Join(tunnels, ",")))
+	osa := fmt.Sprintf("do shell script %q with administrator privileges", shellCmd)
+
+	logf("Запрос прав администратора для настройки туннеля…")
+	if out, err := exec.Command("osascript", "-e", osa).CombinedOutput(); err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("права администратора не получены: %w — %s", err, strings.TrimSpace(string(out)))
+	}
+
+	ln.SetDeadline(time.Now().Add(30 * time.Second))
+	hconn, err := ln.AcceptUnix()
+	ln.Close()
+	if err != nil {
+		return nil, fmt.Errorf("helper не вышел на связь: %w", err)
+	}
+
+	tunFile, utunName, err := recvTunFD(hconn, logf)
+	if err != nil {
+		hconn.Close()
+		return nil, err
+	}
+	hconn.SetReadDeadline(time.Time{})
+	logf(fmt.Sprintf("Интерфейс %s получен от helper", utunName))
+	return &tunHelper{file: tunFile, name: utunName, conn: hconn, excludes: excludes, userExcludes: userExcludes}, nil
+}
+
+// setDarwinStateLocked запоминает поднятый туннель (stateMu уже захвачен).
+func (w *WG) setDarwinStateLocked(h *tunHelper, tunnels []string, logf wgLogFunc) {
+	w.helperConn = h.conn
+	w.activeExcludeRoutes = h.excludes
+	w.activeUserExcludes = h.userExcludes
+	w.refreshStop = make(chan struct{})
+	go w.excludeRefreshLoop(w.refreshStop, logf)
+	w.activeRoutesMu.Lock()
+	w.activeRoutes = tunnels
+	w.activeRoutesMu.Unlock()
 }
 
 func (w *WG) teardownDarwin() {
@@ -199,6 +261,14 @@ func (w *WG) teardownDarwin() {
 	w.activeUserExcludes = nil
 
 	// Останавливаем движок и закрываем fd — utun и его маршруты исчезают сами
+	if w.activeXray != nil {
+		_ = w.activeXray.Close()
+		w.activeXray = nil
+	}
+	if w.activeTunFile != nil {
+		_ = w.activeTunFile.Close()
+		w.activeTunFile = nil
+	}
 	if w.activeDevice != nil {
 		w.activeDevice.Close()
 		w.activeDevice = nil

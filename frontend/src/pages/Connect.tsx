@@ -5,7 +5,7 @@ import {
   IconFlameFilled, IconShieldFilled, IconLayoutGridFilled, IconCloudFilled, IconBrandSpeedtest,
   IconStarFilled, IconHeartFilled, IconBoltFilled, IconRocket,
   IconCrownFilled, IconDiamondFilled, IconLeafFilled, IconSnowflake,
-  IconServer, IconGlobe, IconLockFilled, IconWifi,
+  IconServer, IconGlobe, IconLockFilled, IconWifi, IconTrash,
 } from '@tabler/icons-react';
 import AddServer from '../modals/Add-server';
 import EditServer from '../modals/Edit-server';
@@ -16,7 +16,8 @@ import { logStore } from '../lib/stores/logStore';
 import { wdttLinkStore } from '../lib/utils/wdttLink';
 import { SaveProfile } from '../../wailsjs/go/backend/App';
 import type { Server, TunnelState } from '../lib/types';
-import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles } from '../../wailsjs/go/backend/App';
+import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles, ConnectXray } from '../../wailsjs/go/backend/App';
+import type { backend } from '../../wailsjs/go/models';
 import Bubble from '../components/Bubble';
 import { statsStore, formatRate, formatDuration, sessionClock, type TunnelStats } from '../lib/stores/statsStore';
 import { stageStore, degradedStore } from '../lib/stores/stageStore';
@@ -140,10 +141,11 @@ function StatsCard({ stats, active }: { stats: TunnelStats | null; active: boole
   );
 }
 
-function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, onIconClick, onEdit }: {
+function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, onIconClick, onEdit, onRemove }: {
   servers: Server[]; selected: Server | null; listOpen: boolean;
   onToggleList: () => void; onSelect: (s: Server) => void;
   onIconClick: (e: React.MouseEvent, s: Server) => void; onEdit: (s: Server) => void;
+  onRemove: (s: Server) => void;
 }) {
   return (
     <div className="status-bar">
@@ -164,10 +166,17 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
               </button>
               <span className="status-name">
                 {s.name}
+                {s.group && <small className="server-group">{s.group}</small>}
               </span>
-              <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onEdit(s); }} aria-label="Редактировать">
-                <IconPencil size={15} stroke={2} />
-              </button>
+              {s.kind === 'xray' ? (
+                <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onRemove(s); }} aria-label="Удалить">
+                  <IconTrash size={15} stroke={2} />
+                </button>
+              ) : (
+                <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onEdit(s); }} aria-label="Редактировать">
+                  <IconPencil size={15} stroke={2} />
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -342,6 +351,21 @@ export default function Connect() {
     if (tunnelState !== 'idle') return;
     if (connectingRef.current) return; // guard от двойного клика
     connectingRef.current = true;
+    if (cur.kind === 'xray') {
+      tunnelStore.set('connecting');
+      logStore.clear();
+      try {
+        await ConnectXray(cur.link ?? '', cur.name);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logStore.push('ERROR', msg);
+        toastStore.show(msg, 6000);
+        tunnelStore.set('idle');
+      } finally {
+        connectingRef.current = false;
+      }
+      return;
+    }
     const hashes = (cur.hashes ?? []).filter(h => h.trim());
     if (hashes.length === 0) {
       toastStore.show('Добавьте хеши в профиле сервера');
@@ -403,6 +427,37 @@ export default function Connect() {
     setSelected(s);
   };
 
+  // Подписку добавляем целиком; повторная загрузка той же ссылки заменяет её серверы
+  const handleAddSubscription = (sub: backend.Subscription) => {
+    const others = serverStore.getAll().filter(s => s.subUrl !== sub.url);
+    const prevSelected = selected?.subUrl === sub.url ? selected.name : null;
+    const added: Server[] = sub.servers.map(x => ({
+      id: crypto.randomUUID(), name: x.name, host: x.host, password: '', icon: 'globe',
+      kind: 'xray', link: x.link, transport: x.transport, group: sub.title, subUrl: sub.url,
+    }));
+    serverStore.save([...others, ...added]);
+    setServers(serverStore.getAll());
+    setSelected(added.find(a => a.name === prevSelected) ?? added[0] ?? null);
+    toastStore.show(`«${sub.title}»: серверов ${added.length}${sub.skipped ? `, пропущено ${sub.skipped} (протокол пока не поддерживается)` : ''}`, 4000);
+  };
+
+  // Сервер подписки удаляем сразу, с «Вернуть»
+  const handleRemoveXray = (server: Server) => {
+    const before = serverStore.getAll();
+    const idx = before.findIndex(s => s.id === server.id);
+    handleDelete(server.id);
+    toastStore.show(`Удалён: ${server.name}`, 5000, {
+      label: 'Вернуть',
+      run: () => {
+        const cur = serverStore.getAll();
+        if (cur.some(s => s.id === server.id)) return;
+        cur.splice(Math.min(idx, cur.length), 0, server);
+        serverStore.save(cur);
+        setServers(serverStore.getAll());
+      },
+    });
+  };
+
   const handleSave = (server: Server) => {
     serverStore.update(server);
     const all = serverStore.getAll();
@@ -453,7 +508,7 @@ export default function Connect() {
           <div className="hero-sub">
             {!selected ? 'Добавьте сервер кнопкой «+»'
               : tunnelState === 'idle' ? 'Нажмите на пузырь, чтобы подключиться'
-              : degraded && tunnelState === 'connected' ? <span className="hero-stage">Нет связи с серверами ВК — интернет пока напрямую</span>
+              : degraded && tunnelState === 'connected' && selected.kind !== 'xray' ? <span className="hero-stage">Нет связи с серверами ВК — интернет пока напрямую</span>
               : tunnelState === 'connecting' && stage ? <span key={stage} className="hero-stage">{stage}</span>
               : selected.name}
           </div>
@@ -470,9 +525,10 @@ export default function Connect() {
           onSelect={(s) => { setSelected({ ...s }); setListOpen(false); }}
           onIconClick={handleIconClick}
           onEdit={(s) => setEditServer(s)}
+          onRemove={handleRemoveXray}
         />
 
-        {addServerOpen && <AddServer onClose={() => setAddServerOpen(false)} onAdd={handleAdd} />}
+        {addServerOpen && <AddServer onClose={() => setAddServerOpen(false)} onAdd={handleAdd} onAddSubscription={handleAddSubscription} />}
         {editServer && (
           <EditServer
             server={editServer}

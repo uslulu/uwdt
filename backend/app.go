@@ -6,7 +6,7 @@ import (
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const Version = "1.7.0"
+const Version = "1.8.0"
 
 // App — главный объект приложения.
 // Wails привязывает его методы к frontend через Bind().
@@ -183,6 +183,16 @@ func (a *App) SetRussiaDirect(v bool) (RussiaInfo, error) {
 	}
 	go wg.RefreshExcludes(func(msg string) { a.onBridgeEvent("log", "INFO", "[WG] "+msg) })
 	return a.GetRussiaDirect(), nil
+}
+
+// FetchSubscription скачивает подписку VPN и возвращает её серверы.
+func (a *App) FetchSubscription(url string) (*Subscription, error) {
+	return FetchSubscription(url)
+}
+
+// ConnectXray подключает к серверу из подписки (ссылка vless://).
+func (a *App) ConnectXray(link, name string) error {
+	return a.bridge.ConnectXray(link, name)
 }
 
 // ASNames — названия компаний для номеров AS (подписи в окне исключений).

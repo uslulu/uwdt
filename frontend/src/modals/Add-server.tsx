@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { IconCircleHalf2, IconEye, IconEyeOff, IconX, IconHash } from '@tabler/icons-react';
 import type { Server } from '../lib/types';
-import { SaveProfile } from '../../wailsjs/go/backend/App';
+import { SaveProfile, FetchSubscription } from '../../wailsjs/go/backend/App';
+import type { backend } from '../../wailsjs/go/models';
 import { parseWdttUrl } from '../lib/utils/wdttLink';
 import { toastStore } from '../lib/stores/toastStore';
 import Hash from './Hash';
@@ -9,9 +10,17 @@ import Hash from './Hash';
 interface Props {
   onClose: () => void;
   onAdd: (server: Omit<Server, 'id'>) => void;
+  onAddSubscription: (sub: backend.Subscription) => void;
 }
 
-export default function AddServer({ onClose, onAdd }: Props) {
+// Имя сервера из ссылки vless://…#Имя
+const vlessName = (link: string) => {
+  const i = link.indexOf('#');
+  if (i < 0) return '';
+  try { return decodeURIComponent(link.slice(i + 1)).trim(); } catch { return link.slice(i + 1).trim(); }
+};
+
+export default function AddServer({ onClose, onAdd, onAddSubscription }: Props) {
   const [link, setLink] = useState('');
   const [name, setName] = useState('');
   const [ip, setIp] = useState('');
@@ -55,6 +64,31 @@ export default function AddServer({ onClose, onAdd }: Props) {
   };
 
   const [saving, setSaving] = useState(false);
+
+  // Вставили подписку https://… или одиночный сервер vless://… — ручные поля не нужны
+  const raw = link.trim();
+  const isSub = /^https?:\/\//i.test(raw);
+  const isVless = raw.toLowerCase().startsWith('vless://');
+
+  const handleSubscription = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const sub = await FetchSubscription(raw);
+      onAddSubscription(sub);
+      onClose();
+    } catch (e) {
+      toastStore.show(String(e), 5000);
+      setSaving(false);
+    }
+  };
+
+  const handleVless = () => {
+    const n = name.trim() || vlessName(raw) || 'Сервер VLESS';
+    const m = raw.match(/[?&]type=([^&#]+)/);
+    onAdd({ name: n, host: '', password: '', kind: 'xray', link: raw, transport: m ? m[1] : 'tcp', icon: 'globe' });
+    onClose();
+  };
 
   const handleAdd = async () => {
     if (!name.trim() || !ip.trim() || saving) return;
@@ -105,6 +139,7 @@ export default function AddServer({ onClose, onAdd }: Props) {
         .as-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); cursor: pointer; }
         .as-hash-btn { width: 100%; margin-top: 4px; margin-bottom: 10px; padding: 13px; border: 1.5px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font-size: 14px; font-family: 'Geist', sans-serif; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: border-color 0.15s, box-shadow 0.15s; }
         .as-hash-btn:hover { border-color: var(--accent); box-shadow: 0 0 16px var(--accent-dim, rgba(139,92,246,0.2)); }
+        .as-note { font-size: 12px; line-height: 1.45; color: var(--text-3); margin: -2px 2px 12px; }
         .as-pw-wrap { position: relative; display: flex; align-items: center; margin-bottom: 10px; }
         .as-pw-toggle { position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: var(--text-4); padding: 0; display: flex; align-items: center; }
       `}</style>
@@ -118,11 +153,28 @@ export default function AddServer({ onClose, onAdd }: Props) {
 
           <input
             className="as-input"
-            placeholder="Вставьте ссылку wdtt://..."
+            placeholder="Ссылка wdtt://, vless:// или подписка https://…"
             value={link}
             onChange={e => applyLink(e.target.value)}
           />
 
+          {isSub && (
+            <>
+              <div className="as-note">Подписка: UWDT скачает список серверов (VLESS) и добавит их отдельной группой. Подключение к ним — через движок Xray.</div>
+              <button type="button" className="as-btn" onClick={handleSubscription} disabled={saving}>
+                {saving ? 'Загрузка подписки…' : 'Загрузить подписку'}
+              </button>
+            </>
+          )}
+
+          {isVless && (
+            <>
+              <input className="as-input" placeholder={vlessName(raw) || 'Название сервера'} value={name} onChange={e => setName(e.target.value)} />
+              <button type="button" className="as-btn" onClick={handleVless}>Добавить сервер</button>
+            </>
+          )}
+
+          {!isSub && !isVless && (<>
           <div className="as-divider">или вручную</div>
 
           <input className="as-input" placeholder="Название сервера" value={name} onChange={e => setName(e.target.value)} />
@@ -161,6 +213,7 @@ export default function AddServer({ onClose, onAdd }: Props) {
           <button type="button" className="as-btn" onClick={handleAdd} disabled={!name.trim() || !ip.trim() || saving}>
             {saving ? 'Сохранение...' : 'Добавить сервер'}
           </button>
+          </>)}
         </div>
       </div>
       {hashOpen && (

@@ -8,6 +8,12 @@ export interface Server {
   icon?: string;
   hashes?: [string, string, string, string];
   power?: number;
+  // Сервер из подписки (движок Xray): ссылка vless://, название подписки и её адрес
+  kind?: 'xray';
+  link?: string;
+  group?: string;
+  subUrl?: string;
+  transport?: string;
 }
 
 export interface AppSettings {

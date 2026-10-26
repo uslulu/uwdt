@@ -78,6 +78,14 @@ export function ASNames(arg1) {
   return window['go']['backend']['App']['ASNames'](arg1);
 }
 
+export function ConnectXray(arg1, arg2) {
+  return window['go']['backend']['App']['ConnectXray'](arg1, arg2);
+}
+
+export function FetchSubscription(arg1) {
+  return window['go']['backend']['App']['FetchSubscription'](arg1);
+}
+
 export function CheckExclude(arg1) {
   return window['go']['backend']['App']['CheckExclude'](arg1);
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ type Bridge struct {
 	stage   stageTracker
 	health  sessionHealth
 	session uint64 // номер сессии; stale forwardEvents не должен трогать новую
+	xray    bool   // текущая сессия — сервер из подписки (Xray), без ядра VK TURN
 }
 
 func NewBridge(ctx context.Context, store *Store, onEvent func(string, ...any)) *Bridge {
@@ -138,6 +140,117 @@ func (b *Bridge) Disconnect() {
 	if c != nil {
 		c.Stop()
 	}
+
+	// У сессии Xray нет ядра, которое сообщило бы об остановке, — завершаем сами
+	b.mu.Lock()
+	xraySess, sess := b.xray, b.session
+	b.mu.Unlock()
+	if xraySess {
+		b.finishXray(sess)
+	}
+}
+
+// ConnectXray подключает к серверу из подписки (ссылка vless://) через Xray.
+// Ядро VK TURN при этом не запускается; маршруты и исключения — те же.
+func (b *Bridge) ConnectXray(link, name string) error {
+	v, err := ParseVLESS(link)
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	if b.running {
+		b.mu.Unlock()
+		return fmt.Errorf("already running")
+	}
+	b.running = true
+	b.xray = true
+	b.session++
+	b.stage = stageTracker{}
+	b.health = sessionHealth{}
+	sessID := b.session
+	b.logFile = b.store.OpenLogFile()
+	b.mu.Unlock()
+
+	b.onEvent("state_changed", "connecting")
+	logf := func(msg string) {
+		b.onEvent("log", "INFO", "[XRAY] "+msg)
+		b.mu.Lock()
+		if b.logFile != nil {
+			b.logFile.Write("INFO", "[XRAY] "+msg)
+		}
+		stage, moved := b.stage.feed(msg)
+		b.mu.Unlock()
+		if moved {
+			b.onEvent("stage", stage)
+		}
+	}
+
+	go func() {
+		logf(fmt.Sprintf("Сервер из подписки: %s (%s, %s)", name, v.param("type", "tcp"), v.param("security", "none")))
+		ips := resolveServerIPv4(v.Host)
+		if len(ips) == 0 {
+			b.onEvent("error", "[XRAY] Не удалось узнать адрес сервера "+v.Host)
+			b.finishXray(sessID)
+			return
+		}
+		err := wg.ApplyXray(link, ips, logf)
+
+		b.mu.Lock()
+		stale := b.session != sessID || !b.running
+		b.mu.Unlock()
+		switch {
+		case err != nil:
+			b.onEvent("error", fmt.Sprintf("[XRAY] Ошибка: %v", err))
+			b.finishXray(sessID)
+		case stale:
+			// Отключили, пока шёл запрос пароля, — туннель уже никому не нужен
+			wg.Teardown()
+		default:
+			logf("Туннель активен")
+			b.onEvent("state_changed", "connected")
+		}
+	}()
+	return nil
+}
+
+// finishXray закрывает сессию Xray, если она всё ещё текущая.
+func (b *Bridge) finishXray(sessID uint64) {
+	b.mu.Lock()
+	if b.session != sessID || !b.xray || !b.running {
+		b.mu.Unlock()
+		return
+	}
+	b.running = false
+	b.xray = false
+	if b.logFile != nil {
+		b.logFile.Close()
+		b.logFile = nil
+	}
+	b.mu.Unlock()
+	b.onEvent("state_changed", "disconnected")
+}
+
+// resolveServerIPv4 — IPv4-адреса сервера (сам адрес, если это уже IP).
+func resolveServerIPv4(host string) []string {
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.To4() != nil {
+			return []string{ip.String()}
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range addrs {
+		if a.IP.To4() != nil {
+			out = append(out, a.IP.String())
+		}
+	}
+	return out
 }
 
 func (b *Bridge) IsRunning() bool {

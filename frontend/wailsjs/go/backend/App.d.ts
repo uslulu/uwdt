@@ -41,6 +41,10 @@ export function Startup(arg1:context.Context):Promise<void>;
 
 export function ASNames(arg1:Array<string>):Promise<Record<string, string>>;
 
+export function ConnectXray(arg1:string,arg2:string):Promise<void>;
+
+export function FetchSubscription(arg1:string):Promise<backend.Subscription>;
+
 export function CheckExclude(arg1:string):Promise<string>;
 
 export function GetExcludes():Promise<Array<backend.ExcludeEntry>>;

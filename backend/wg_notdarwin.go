@@ -19,3 +19,7 @@ func (w *WG) refreshExcludesDarwin(logf wgLogFunc) {
 }
 
 func (w *WG) setTunnelRoutesDarwin(_ bool) error { return nil }
+
+func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) error {
+	return fmt.Errorf("darwin not supported on this platform")
+}

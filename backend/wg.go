@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -50,6 +51,10 @@ type WG struct {
 	// macOS-specific: соединение с привилегированным helper-процессом
 	helperConn *net.UnixConn
 
+	// Режим Xray: запущенный движок и fd интерфейса (закрываются при отключении)
+	activeXray    io.Closer
+	activeTunFile *os.File
+
 	// Пользовательские исключения, применённые сейчас (CIDR), и остановка их обновления
 	activeUserExcludes []string
 	refreshStop        chan struct{}
@@ -70,6 +75,20 @@ func (w *WG) Apply(conf string, turnIPs []string, logf wgLogFunc) error {
 		return w.applyDarwin(conf, turnIPs, logf)
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+}
+
+// ApplyXray поднимает туннель на движке Xray к серверу из ссылки vless://.
+// serverIPs — адреса сервера: они идут мимо туннеля, иначе Xray зациклится сам на себя.
+func (w *WG) ApplyXray(link string, serverIPs []string, logf wgLogFunc) error {
+	if logf == nil {
+		logf = func(msg string) { log.Printf("[XRAY] %s", msg) }
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return w.applyXrayDarwin(link, serverIPs, logf)
+	default:
+		return fmt.Errorf("подписки пока работают только на macOS")
 	}
 }
 
