@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -486,7 +487,16 @@ func (w *WG) teardownWindowsLocked() {
 	if w.activeDevice == nil && w.activeTun == nil {
 		return
 	}
-	clearTunnelDNSWindows()
+	// Каждый шаг — с длительностью в лог: по нему видно, на чём висит «Отключение…»
+	step := func(name string, f func()) {
+		t := time.Now()
+		f()
+		if d := time.Since(t); d > 500*time.Millisecond {
+			log.Printf("[WG] Отключение: %s — %s", name, d.Round(time.Millisecond))
+		}
+	}
+
+	step("DNS", clearTunnelDNSWindows)
 
 	if w.refreshStop != nil {
 		close(w.refreshStop)
@@ -495,47 +505,42 @@ func (w *WG) teardownWindowsLocked() {
 	w.activeUserExcludes = nil
 
 	if w.physGW != "" && len(w.activeExcludeRoutes) > 0 {
-		if _, err := bulkRoutes(false, w.physGW, w.activeExcludeRoutes); err != nil {
-			for _, cidr := range w.activeExcludeRoutes {
-				if ip, _, _ := parseCIDR(cidr); ip != "" {
-					_ = runCmdWindows("route", "delete", ip)
-				}
+		step(fmt.Sprintf("исключения (%d)", len(w.activeExcludeRoutes)), func() {
+			n, err := bulkRoutes(false, w.physGW, w.activeExcludeRoutes)
+			if err != nil {
+				log.Printf("[WG] Снятие исключений: %v", err)
+			} else if n < len(w.activeExcludeRoutes) {
+				log.Printf("[WG] Снято исключений: %d из %d (остальные уже убраны системой)", n, len(w.activeExcludeRoutes))
 			}
-		}
-		w.activeExcludeRoutes = nil
-	}
-
-	// Restore physical gateway metric (must happen BEFORE closing WG device)
-	if w.physGW != "" {
-		_ = runCmdWindows("route", "change", "0.0.0.0", "mask", "0.0.0.0", w.physGW, "metric", "35")
-		w.physGW = ""
-	}
-
-	// Delete exclude routes — пачкой через API (их могут быть тысячи); fallback на route.exe
-	if w.physGW == "" {
-		for _, cidr := range w.activeExcludeRoutes {
-			if ip, _, _ := parseCIDR(cidr); ip != "" {
-				_ = runCmdWindows("route", "delete", ip)
-			}
-		}
+		})
 	}
 	w.activeExcludeRoutes = nil
 
-	// Delete tunnel routes explicitly to prevent Windows routing table corruption
-	for _, cidr := range w.activeRoutes {
-		_ = runCmdWindows("netsh", "interface", "ip", "delete", "route", cidr, wgIface)
+	// Restore physical gateway metric (must happen BEFORE closing WG device)
+	if w.physGW != "" {
+		step("метрика шлюза", func() {
+			_ = runCmdWindows("route", "change", "0.0.0.0", "mask", "0.0.0.0", w.physGW, "metric", "35")
+		})
+		w.physGW = ""
 	}
+
+	// Delete tunnel routes explicitly to prevent Windows routing table corruption
+	step("маршруты туннеля", func() {
+		for _, cidr := range w.activeRoutes {
+			_ = runCmdWindows("netsh", "interface", "ip", "delete", "route", cidr, wgIface)
+		}
+	})
 	w.activeRoutes = nil
 
 	// Close WireGuard device
 	if w.activeDevice != nil {
-		w.activeDevice.Close()
+		step("WireGuard", w.activeDevice.Close)
 		w.activeDevice = nil
 	}
 
 	// Close TUN device (releases wintun adapter, tunnel routes disappear with it)
 	if w.activeTun != nil {
-		w.activeTun.Close()
+		step("адаптер Wintun", func() { w.activeTun.Close() })
 		w.activeTun = nil
 	}
 }

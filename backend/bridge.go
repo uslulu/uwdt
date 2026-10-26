@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	core "wg-turn-client"
 )
@@ -20,7 +21,7 @@ type Bridge struct {
 	logFile *LogFile // полный лог сессии
 	stage   stageTracker
 	health  sessionHealth
-	session uint64   // номер сессии; stale forwardEvents не должен трогать новую
+	session uint64 // номер сессии; stale forwardEvents не должен трогать новую
 }
 
 func NewBridge(ctx context.Context, store *Store, onEvent func(string, ...any)) *Bridge {
@@ -81,7 +82,7 @@ func (b *Bridge) Connect(params ConnectParams) error {
 	// Новое подключение — с чистого листа: без прошлых банов TURN и протухших кредов
 	core.ResetSessionState()
 	c := core.New(cfg)
-	
+
 	b.mu.Lock()
 	b.core = c
 	b.logFile = b.store.OpenLogFile()
@@ -107,6 +108,8 @@ func (b *Bridge) Connect(params ConnectParams) error {
 	return nil
 }
 
+const teardownWait = 20 * time.Second
+
 func (b *Bridge) Disconnect() {
 	b.mu.Lock()
 	c := b.core
@@ -117,9 +120,20 @@ func (b *Bridge) Disconnect() {
 	b.mu.Unlock()
 	b.onEvent("degraded", false)
 
-	// Tear down WireGuard interface immediately — don't wait for core shutdown
-	wg.Teardown()
-	log.Printf("[BRIDGE] WG интерфейс снят по запросу пользователя")
+	// Tear down WireGuard interface immediately — don't wait for core shutdown.
+	// Интерфейс ждёт этот вызов на «Отключение…», поэтому не дольше teardownWait:
+	// если снятие затянулось, оно доработает в фоне
+	done := make(chan struct{})
+	go func() {
+		wg.Teardown()
+		close(done)
+	}()
+	select {
+	case <-done:
+		log.Printf("[BRIDGE] WG интерфейс снят по запросу пользователя")
+	case <-time.After(teardownWait):
+		log.Printf("[BRIDGE] Снятие WG интерфейса идёт дольше %s — продолжаю в фоне", teardownWait)
+	}
 
 	if c != nil {
 		c.Stop()

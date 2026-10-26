@@ -331,6 +331,9 @@ func RunSession(
 	stopRelay := context.AfterFunc(sessCtx, func() {
 		_ = relay.SetDeadline(time.Now())
 		_ = pipeA.SetDeadline(time.Now())
+		// relay.SetDeadline не доходит до записи в TCP к TURN: на мёртвой сети
+		// WriteTo висит вечно, relayWg.Wait тоже — и ядро не останавливается
+		_ = turnConn.SetDeadline(time.Now())
 	})
 	defer stopRelay()
 	defer sessCancel()
