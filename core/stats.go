@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -56,9 +57,8 @@ func itoa(n int) string {
 	return s
 }
 
+// ftoa — два знака после точки с округлением (раньше 0.08 печаталось как «0.8»,
+// а 7.21 — как «7.20», и в [STATS] появлялись ложные скачки трафика)
 func ftoa(f float64) string {
-	// простая конвертация без fmt
-	intPart := int(f)
-	decPart := int((f - float64(intPart)) * 100)
-	return itoa(intPart) + "." + itoa(decPart)
+	return strconv.FormatFloat(f, 'f', 2, 64)
 }
