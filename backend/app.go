@@ -6,7 +6,7 @@ import (
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const Version = "1.6.9"
+const Version = "1.7.0"
 
 // App — главный объект приложения.
 // Wails привязывает его методы к frontend через Bind().
@@ -183,6 +183,11 @@ func (a *App) SetRussiaDirect(v bool) (RussiaInfo, error) {
 	}
 	go wg.RefreshExcludes(func(msg string) { a.onBridgeEvent("log", "INFO", "[WG] "+msg) })
 	return a.GetRussiaDirect(), nil
+}
+
+// ASNames — названия компаний для номеров AS (подписи в окне исключений).
+func (a *App) ASNames(asns []string) map[string]string {
+	return ASNames(asns)
 }
 
 // CheckExclude возвращает нормализованное значение или текст ошибки — для подсказки в поле ввода.

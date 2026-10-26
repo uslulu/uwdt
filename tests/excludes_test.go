@@ -62,3 +62,16 @@ func TestDiffCIDRs(t *testing.T) {
 		t.Errorf("add=%v del=%v", add, del)
 	}
 }
+
+func TestASNHolderName(t *testing.T) {
+	for in, want := range map[string]string{
+		"VALVE-CORPORATION - Valve Corporation": "Valve Corporation",
+		"SBERBANK-AS - Sberbank of Russia PJSC, RU": "Sberbank of Russia PJSC",
+		"Yandex, LLC": "Yandex, LLC",
+		"": "",
+	} {
+		if got := backend.ASNHolderName(in); got != want {
+			t.Errorf("ASNHolderName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

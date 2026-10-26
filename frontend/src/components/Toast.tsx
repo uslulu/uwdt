@@ -6,5 +6,15 @@ export default function Toast() {
   const [msg, setMsg] = useState<string | null>(null);
   useEffect(() => toastStore.subscribe(setMsg), []);
   if (!msg) return null;
-  return <div className="toast">{msg}</div>;
+  const action = toastStore.action();
+  return (
+    <div className={`toast${action ? ' toast--action' : ''}`}>
+      {msg}
+      {action && (
+        <button type="button" className="toast-btn" onClick={() => toastStore.runAction()}>
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
 }

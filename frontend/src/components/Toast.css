@@ -14,6 +14,30 @@
   animation: toast-in 0.2s ease;
 }
 
+/* Тост с кнопкой: кликабелен, кнопка — светлая «пилюля» справа */
+.toast--action {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 6px 6px 16px;
+}
+
+.toast-btn {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.toast-btn:hover { background: rgba(255, 255, 255, 0.35); }
+
 @keyframes toast-in {
   from { opacity: 0; transform: translateX(-50%) translateY(8px); }
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }

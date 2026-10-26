@@ -74,6 +74,10 @@ export function Startup(arg1) {
   return window['go']['backend']['App']['Startup'](arg1);
 }
 
+export function ASNames(arg1) {
+  return window['go']['backend']['App']['ASNames'](arg1);
+}
+
 export function CheckExclude(arg1) {
   return window['go']['backend']['App']['CheckExclude'](arg1);
 }

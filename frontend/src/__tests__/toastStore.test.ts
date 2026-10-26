@@ -65,3 +65,19 @@ describe('toastStore', () => {
     unsub();
   });
 });
+
+describe('toastStore action', () => {
+  it('runAction выполняет действие один раз и прячет тост', () => {
+    let runs = 0;
+    const messages: (string | null)[] = [];
+    const unsub = toastStore.subscribe(msg => messages.push(msg));
+    toastStore.show('Удалено', 5000, { label: 'Вернуть', run: () => { runs++; } });
+    expect(toastStore.action()?.label).toBe('Вернуть');
+    toastStore.runAction();
+    toastStore.runAction();
+    expect(runs).toBe(1);
+    expect(toastStore.action()).toBeNull();
+    expect(messages[messages.length - 1]).toBeNull();
+    unsub();
+  });
+});

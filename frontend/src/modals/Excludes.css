@@ -11,8 +11,7 @@
 .ex-empty { font-size: 12px; color: var(--text-3); text-align: center; padding: 22px 0; }
 .ex-item { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--border-2); }
 .ex-item:last-child { border-bottom: none; }
-.ex-item--off .ex-value, .ex-item--off .ex-kind { opacity: 0.45; }
-.ex-kind { flex-shrink: 0; width: 62px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent); }
+.ex-item--off .ex-value, .ex-item--off .ex-icon { opacity: 0.45; }
 .ex-value { flex: 1; min-width: 0; font-size: 13px; font-family: 'Geist Mono', 'SF Mono', monospace; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ex-toggle { transform: scale(0.8); }
 .ex-del { flex-shrink: 0; display: flex; padding: 4px; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 6px; transition: color 0.15s, background 0.15s; }
@@ -26,13 +25,34 @@
 .ex-russia-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ex-russia-title { font-size: 14px; font-weight: 600; color: var(--text); }
 .ex-russia-sub { font-size: 11px; color: var(--text-3); line-height: 1.35; }
-.ex-presets { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
+.ex-presets { display: flex; flex-direction: column; gap: 8px; margin: 0 0 18px; }
 .ex-preset-group { display: flex; flex-direction: column; gap: 5px; }
 .ex-preset-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-4); }
 .ex-preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
-.ex-preset { padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--text-2); font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 600; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+.ex-preset { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--text-2); font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 600; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
 .ex-preset:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .ex-preset--on, .ex-preset--on:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
 .ex-preset:disabled { cursor: default; }
-.ex-value-sub { font-size: 11px; color: var(--text-4); margin-left: 4px; }
-.ex-value-label { font-family: 'Geist', sans-serif; font-weight: 600; }
+.ex-value-sub { display: block; font-size: 11px; font-family: 'Geist', sans-serif; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+
+/* Заголовки разделов: «Готовые наборы», «Свои исключения» */
+.ex-section { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; }
+.ex-section-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.ex-section-count { font-size: 11px; color: var(--text-3); }
+
+/* Число записей в наборе — маленький бейдж внутри кнопки */
+.ex-preset-count { min-width: 16px; padding: 0 5px; border-radius: 999px; background: var(--seg-bg); color: var(--text-3); font-size: 10px; line-height: 16px; text-align: center; }
+.ex-preset--on .ex-preset-count { background: rgba(255, 255, 255, 0.25); color: var(--accent-fg); }
+
+/* Иконка типа записи: домен, подсеть, адрес, компания */
+.ex-icon { flex-shrink: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--accent-dim); color: var(--accent); }
+
+.ex-search { display: flex; align-items: center; gap: 8px; padding: 0 10px; margin: 2px 0 8px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--bg-2); color: var(--text-3); transition: border-color 0.15s; }
+.ex-search:focus-within { border-color: var(--accent); }
+.ex-search input { flex: 1; min-width: 0; padding: 7px 0; border: none; background: none; color: var(--text); font-size: 12px; font-family: inherit; outline: none; }
+.ex-search-clear { display: flex; padding: 3px; border: none; border-radius: 6px; background: none; color: var(--text-3); cursor: pointer; }
+.ex-search-clear:hover { color: var(--text); background: var(--seg-bg); }
+
+@media (max-width: 500px) {
+  .ex-modal { width: calc(100vw - 32px); }
+}

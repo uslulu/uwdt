@@ -39,6 +39,8 @@ export function Shutdown(arg1:context.Context):Promise<void>;
 
 export function Startup(arg1:context.Context):Promise<void>;
 
+export function ASNames(arg1:Array<string>):Promise<Record<string, string>>;
+
 export function CheckExclude(arg1:string):Promise<string>;
 
 export function GetExcludes():Promise<Array<backend.ExcludeEntry>>;
