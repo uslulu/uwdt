@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { MotionConfig } from 'motion/react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import Connect from './pages/Connect';
@@ -94,7 +95,9 @@ export default function App() {
   useWdttPaste();
   const { updateInfo, closeUpdate } = useUpdateChecker();
 
+  // reducedMotion="user": при «Уменьшить движение» в системе анимации Motion выключаются
   return (
+    <MotionConfig reducedMotion="user">
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
@@ -113,5 +116,6 @@ export default function App() {
         />
       )}
     </BrowserRouter>
+    </MotionConfig>
   );
 }

@@ -39,8 +39,9 @@ export default function Excludes({ onClose }: Props) {
   const [asNames, setAsNames] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Актуальный список для «Вернуть» в тосте: тост живёт дольше этого рендера
   const itemsRef = useRef<ExcludeEntry[]>([]);
-  itemsRef.current = items;
+  useEffect(() => { itemsRef.current = items; }, [items]);
 
   useEffect(() => {
     GetExcludes().then(list => setItems(list ?? [])).catch(() => toastStore.show('Не удалось загрузить исключения', 3000));

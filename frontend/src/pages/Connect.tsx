@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import NumberFlow, { NumberFlowGroup } from '@number-flow/react';
 import type React from 'react';
 import {
   IconCloverFilled, IconPlus, IconChevronUp, IconPencil,
@@ -86,18 +88,42 @@ const STATUS_TITLE: Record<TunnelState, string> = {
   disconnecting: 'Отключение…',
 };
 
+// Волны вокруг пузыря: частые — пока подключаемся, редкие и спокойные — когда подключено
+function Ripples({ state }: { state: TunnelState }) {
+  const active = state === 'connecting' || state === 'connected';
+  const fast = state === 'connecting';
+  return (
+    <AnimatePresence>
+      {active && (
+        <motion.span key={fast ? 'fast' : 'slow'} className="ripples" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }}>
+          {[0, 1, 2].slice(0, fast ? 3 : 2).map(i => (
+            <motion.span
+              key={i}
+              className="ripple"
+              initial={{ scale: 1, opacity: 0 }}
+              animate={{ scale: fast ? 1.55 : 1.4, opacity: [0, fast ? 0.45 : 0.28, 0] }}
+              transition={{ duration: fast ? 1.8 : 4, repeat: Infinity, delay: i * (fast ? 0.6 : 2), ease: 'easeOut' }}
+            />
+          ))}
+        </motion.span>
+      )}
+    </AnimatePresence>
+  );
+}
+
 function PowerButton({ tunnelState, linkFlash, selected, onTunnel }: {
   tunnelState: TunnelState; linkFlash: boolean; selected: Server | null; onTunnel: () => void;
 }) {
   return (
     <button
       type="button"
-      className={`power-btn${linkFlash ? ' power-btn--flash' : ''}`}
+      className={`power-btn${linkFlash ? ' power-btn--flash' : ''}${selected?.kind === 'xray' ? ' power-btn--sub' : ''}`}
       onClick={onTunnel}
       disabled={!selected}
       title={selected ? TUNNEL_LABEL[tunnelState] : 'Добавьте сервер'}
       aria-label={selected ? TUNNEL_LABEL[tunnelState] : 'Добавьте сервер'}
     >
+      <Ripples state={tunnelState} />
       <Bubble state={tunnelState} />
     </button>
   );
@@ -117,23 +143,53 @@ function useSessionDuration(active: boolean) {
 
 const TRANSPORT_LABEL: Record<string, string> = { tcp: 'TCP', raw: 'TCP', xhttp: 'xHTTP', splithttp: 'xHTTP', grpc: 'gRPC', ws: 'WS' };
 
+// Скорость перекатывающимися цифрами: до 10 Мбит/с — с десятыми
+function Rate({ bps }: { bps: number }) {
+  const { unit } = formatRate(bps);
+  const mbit = unit === 'Мбит/с';
+  const v = mbit ? bps / 1e6 : bps / 1e3;
+  const digits = mbit && v < 10 ? 1 : 0;
+  return (
+    <span className="stat-value">
+      {!mbit && bps > 0 && v < 1 ? '<1' : <NumberFlow value={Number(v.toFixed(digits))} format={{ minimumFractionDigits: digits, maximumFractionDigits: digits }} />}
+      {' '}<small>{unit}</small>
+    </span>
+  );
+}
+
+// «В сети» — секунды перекатываются, как на табло
+function Duration({ text }: { text: string }) {
+  const parts = text.split(':').map(Number);
+  if (parts.some(Number.isNaN)) return <span className="stat-value">{text}</span>;
+  return (
+    <span className="stat-value">
+      <NumberFlowGroup>
+        {parts.map((p, i) => (
+          <span key={i}>
+            {i > 0 && ':'}
+            <NumberFlow value={p} format={{ minimumIntegerDigits: i === 0 ? 1 : 2 }} trend={1} />
+          </span>
+        ))}
+      </NumberFlowGroup>
+    </span>
+  );
+}
+
 function StatsCard({ stats, active, transport }: { stats: TunnelStats | null; active: boolean; transport?: string }) {
-  const down = formatRate(stats?.downBps ?? 0);
-  const up = formatRate(stats?.upBps ?? 0);
   const duration = useSessionDuration(active);
   return (
     <div className="stats-card">
       <div className="stat">
         <span className="stat-label"><IconClock size={14} stroke={2.2} />В сети</span>
-        <span className="stat-value">{duration}</span>
+        <Duration text={duration} />
       </div>
       <div className="stat">
         <span className="stat-label"><IconArrowDown size={14} stroke={2.4} />Скачивание</span>
-        <span className="stat-value">{down.value} <small>{down.unit}</small></span>
+        <Rate bps={stats?.downBps ?? 0} />
       </div>
       <div className="stat">
         <span className="stat-label"><IconArrowUp size={14} stroke={2.4} />Отдача</span>
-        <span className="stat-value">{up.value} <small>{up.unit}</small></span>
+        <Rate bps={stats?.upBps ?? 0} />
       </div>
       <div className="stat">
         {transport ? (
@@ -194,7 +250,11 @@ function PingBadge({ ms, pinging }: { ms?: number; pinging: boolean }) {
   if (ms === undefined) return pinging ? <span className="ping ping--wait">…</span> : null;
   if (ms < 0) return <span className="ping ping--dead" title="Сервер не ответил">нет ответа</span>;
   const cls = ms < 400 ? 'good' : ms < 900 ? 'mid' : 'slow';
-  return <span className={`ping ping--${cls}`} title="Задержка запроса через сервер">{ms} мс</span>;
+  return (
+    <motion.span className={`ping ping--${cls}`} title="Задержка запроса через сервер" initial={{ opacity: 0, scale: 0.85 }} animate={{ opacity: 1, scale: 1 }} transition={{ type: 'spring', stiffness: 380, damping: 24 }}>
+      <NumberFlow value={ms} /> мс
+    </motion.span>
+  );
 }
 
 // Метка способа подключения на нижней панели
@@ -210,8 +270,16 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
 }) {
   return (
     <div className="status-bar">
+      <AnimatePresence>
       {listOpen && servers.length > 0 && (
-        <div className="server-list">
+        <motion.div
+          className="server-list"
+          initial={{ opacity: 0, y: 14, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 10, scale: 0.98 }}
+          transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+          style={{ transformOrigin: 'bottom center' }}
+        >
           {groupServers(servers).map(g => (
             <section key={g.key} className={`server-section server-section--${g.kind}`}>
               <div className="ss-head">
@@ -261,8 +329,9 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
               ))}
             </section>
           ))}
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       <button type="button" className={`status-server${!selected ? ' status-server--empty' : ''}`} onClick={onToggleList}>
         <ServerIcon iconKey={selected?.icon} size={20} />
@@ -577,13 +646,16 @@ export default function Connect() {
     const stale = new Set(serverStore.getAll().filter(s => s.subUrl && Date.now() - (s.subUpdated ?? 0) > SUB_TTL).map(s => s.subUrl!));
     for (const url of stale) await refreshSub(url, true);
   };
-  useEffect(() => { refreshStaleSubs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // queueMicrotask: состояние меняется уже после эффекта, а не синхронно внутри него
+  useEffect(() => { queueMicrotask(refreshStaleSubs); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Пинг — при открытии списка, если прошлый старше двух минут
   useEffect(() => {
     if (!listOpen) return;
-    refreshStaleSubs();
-    if (Date.now() - pingedAtRef.current > 2 * 60 * 1000) pingAll();
+    queueMicrotask(() => {
+      refreshStaleSubs();
+      if (Date.now() - pingedAtRef.current > 2 * 60 * 1000) pingAll();
+    });
   }, [listOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRefreshSub = async (url: string) => {
@@ -675,7 +747,18 @@ export default function Connect() {
             selected={selected}
             onTunnel={handleTunnel}
           />
-          <div className="hero-title">{!selected ? 'Нет серверов' : degraded && tunnelState === 'connected' ? 'Восстанавливаю связь…' : STATUS_TITLE[tunnelState]}</div>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={!selected ? 'none' : degraded && tunnelState === 'connected' ? 'degraded' : tunnelState}
+              className="hero-title"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.18 }}
+            >
+              {!selected ? 'Нет серверов' : degraded && tunnelState === 'connected' ? 'Восстанавливаю связь…' : STATUS_TITLE[tunnelState]}
+            </motion.div>
+          </AnimatePresence>
           <div className="hero-sub">
             {!selected ? 'Добавьте сервер кнопкой «+»'
               : tunnelState === 'idle' ? 'Нажмите на пузырь, чтобы подключиться'

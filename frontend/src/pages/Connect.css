@@ -1,7 +1,7 @@
 * { font-family: 'Geist', sans-serif; font-weight: 500; box-sizing: border-box; }
 .main { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; animation: page-in 0.25s ease-out; background: radial-gradient(ellipse 60% 50% at 50% 40%, var(--accent-dim), transparent 70%), var(--bg); }
 .hero { display: flex; flex-direction: column; align-items: center; margin-top: -70px; }
-.power-btn { background: none; border: none; padding: 0; cursor: pointer; border-radius: 50%; transition: transform 0.25s cubic-bezier(.3,1.6,.5,1), opacity 0.2s; -webkit-tap-highlight-color: transparent; }
+.power-btn { position: relative; background: none; border: none; padding: 0; cursor: pointer; border-radius: 50%; transition: transform 0.25s cubic-bezier(.3,1.6,.5,1), opacity 0.2s; -webkit-tap-highlight-color: transparent; }
 .power-btn:hover:not(:disabled) { transform: scale(1.04); }
 .power-btn:active:not(:disabled) { transform: scale(0.96); }
 .power-btn:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -22,7 +22,7 @@
 .btn-add:hover { background: var(--accent-dim); color: var(--accent); }
 @keyframes link-flash { 0% { opacity:1; } 30% { opacity:0.2; } 60% { opacity:1; } 80% { opacity:0.4; } 100% { opacity:1; } }
 .status-bar { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: stretch; width: 380px; max-width: calc(100vw - 32px); }
-.server-list { border: 1px solid var(--border-2); border-radius: 14px; box-shadow: var(--shadow); overflow-x: hidden; overflow-y: auto; max-height: min(420px, calc(100vh - 120px)); overscroll-behavior: contain; scrollbar-gutter: stable; margin-bottom: 8px; background: var(--surface); animation: slide-down 0.28s ease-out; }
+.server-list { border: 1px solid var(--border-2); border-radius: 14px; box-shadow: var(--shadow); overflow-x: hidden; overflow-y: auto; max-height: min(420px, calc(100vh - 120px)); overscroll-behavior: contain; scrollbar-gutter: stable; margin-bottom: 8px; background: var(--surface); }
 .server-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 18px; background: var(--surface); font-size: 15px; color: var(--text); font-family: 'Geist', sans-serif; font-weight: 500; border-bottom: 1px solid var(--border-2); }
 .server-item:last-child { border-bottom: none; }
 .server-item:hover { background: var(--bg-2); }
@@ -74,3 +74,13 @@
 .status-server:hover { border-color: var(--accent); }
 .server-icon-btn { color: var(--accent); }
 .hero-stage { display: inline-block; color: var(--accent); animation: slide-down 0.25s ease-out; }
+
+/* Волны вокруг пузыря (цвет — от режима, как и вода) */
+.ripples { position: absolute; inset: 0; pointer-events: none; }
+.ripple { position: absolute; inset: 12px; border-radius: 50%; border: 2px solid var(--water-bottom); box-shadow: 0 0 24px var(--glow); }
+
+/* Подписка — фиолетовая вода, VK TURN — синяя (как полосы разделов в списке) */
+.power-btn--sub { --water-top: #c4b5fd; --water-bottom: #7c3aed; --glass-edge: rgba(139, 92, 246, 0.32); --glow: rgba(139, 92, 246, 0.38); }
+[data-theme="dark"] .power-btn--sub { --water-top: #a78bfa; --water-bottom: #6d28d9; --glass-edge: rgba(167, 139, 250, 0.32); --glow: rgba(139, 92, 246, 0.45); }
+.power-btn--sub .bubble--idle .bubble-icon, .power-btn--sub .bubble--connecting .bubble-icon { color: #8b5cf6; }
+.power-btn--sub:focus-visible { outline-color: #8b5cf6; }
