@@ -121,8 +121,6 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 // но интерфейсу macOS нужен IPv4, чтобы на него можно было повесить маршруты
 const xrayTunAddr = "10.255.255.1/32"
 
-const xrayMTU = 1400
-
 func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) error {
 	w.teardownDarwin()
 

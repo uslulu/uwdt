@@ -27,7 +27,11 @@ func setTunnelDNSWindows(dev tun.Device, servers []string, logf wgLogFunc) {
 	if !ok {
 		return
 	}
-	luid := winipcfg.LUID(nt.LUID())
+	setTunnelDNSLUID(winipcfg.LUID(nt.LUID()), servers, logf)
+}
+
+// setTunnelDNSLUID — то же для любого адаптера по LUID (в режиме Xray адаптер создаёт сам Xray).
+func setTunnelDNSLUID(luid winipcfg.LUID, servers []string, logf wgLogFunc) {
 
 	var addrs []netip.Addr
 	quoted := make([]string, 0, len(servers))

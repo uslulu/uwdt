@@ -51,9 +51,12 @@ type WG struct {
 	// macOS-specific: соединение с привилегированным helper-процессом
 	helperConn *net.UnixConn
 
-	// Режим Xray: запущенный движок и fd интерфейса (закрываются при отключении)
+	// Режим Xray: запущенный движок и fd интерфейса (закрываются при отключении).
+	// xrayMode (Windows): метрику физического шлюза не трогали, маршруты туннеля
+	// уходят вместе с адаптером Xray
 	activeXray    io.Closer
 	activeTunFile *os.File
+	xrayMode      bool
 
 	// Пользовательские исключения, применённые сейчас (CIDR), и остановка их обновления
 	activeUserExcludes []string
@@ -87,8 +90,10 @@ func (w *WG) ApplyXray(link string, serverIPs []string, logf wgLogFunc) error {
 	switch runtime.GOOS {
 	case "darwin":
 		return w.applyXrayDarwin(link, serverIPs, logf)
+	case "windows":
+		return w.applyXrayWindows(link, serverIPs, logf)
 	default:
-		return fmt.Errorf("подписки пока работают только на macOS")
+		return fmt.Errorf("подписки на %s не поддерживаются", runtime.GOOS)
 	}
 }
 
@@ -503,7 +508,7 @@ func (w *WG) teardownWindows() {
 }
 
 func (w *WG) teardownWindowsLocked() {
-	if w.activeDevice == nil && w.activeTun == nil {
+	if w.activeDevice == nil && w.activeTun == nil && w.activeXray == nil {
 		return
 	}
 	// Каждый шаг — с длительностью в лог: по нему видно, на чём висит «Отключение…»
@@ -536,7 +541,7 @@ func (w *WG) teardownWindowsLocked() {
 	w.activeExcludeRoutes = nil
 
 	// Restore physical gateway metric (must happen BEFORE closing WG device)
-	if w.physGW != "" {
+	if w.physGW != "" && !w.xrayMode {
 		step("метрика шлюза", func() {
 			_ = runCmdWindows("route", "change", "0.0.0.0", "mask", "0.0.0.0", w.physGW, "metric", "35")
 		})
@@ -550,6 +555,15 @@ func (w *WG) teardownWindowsLocked() {
 		}
 	})
 	w.activeRoutes = nil
+
+	w.physGW = ""
+	w.xrayMode = false
+
+	// Xray закрывает адаптер — маршруты туннеля исчезают вместе с ним
+	if w.activeXray != nil {
+		step("Xray", func() { _ = w.activeXray.Close() })
+		w.activeXray = nil
+	}
 
 	// Close WireGuard device
 	if w.activeDevice != nil {
@@ -571,7 +585,7 @@ func (w *WG) refreshExcludesWindows(logf wgLogFunc) {
 
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
-	if w.activeDevice == nil || w.physGW == "" {
+	if (w.activeDevice == nil && w.activeXray == nil) || w.physGW == "" {
 		return
 	}
 	user := map[string]bool{}

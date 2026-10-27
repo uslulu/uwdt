@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,17 +22,31 @@ import (
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
-const xrayTunFdEnv = "xray.tun.fd"
+const (
+	xrayTunFdEnv = "xray.tun.fd"
+	xrayMTU      = 1400
+)
 
 // xrayStartMu: дескриптор передаётся через переменную окружения процесса —
 // два запуска одновременно перепутали бы интерфейсы
 var xrayStartMu sync.Mutex
 
-// BuildXrayConfig — JSON-конфиг Xray: вход из TUN, выход — сервер из ссылки vless://.
-func BuildXrayConfig(link string, mtu int) ([]byte, error) { return buildXrayConfig(link, mtu, true) }
+// xrayTunName — имя TUN-входа Xray. На macOS имя не используется (интерфейс
+// приходит через xray.tun.fd), на Windows Xray создаёт адаптер Wintun с этим именем.
+func xrayTunName() string {
+	if runtime.GOOS == "windows" {
+		return "uwdt-xray"
+	}
+	return "utun99"
+}
 
-// withTun=false — без входа TUN: для проверки ссылки, Xray при этом не создаёт интерфейс
-func buildXrayConfig(link string, mtu int, withTun bool) ([]byte, error) {
+// BuildXrayConfig — JSON-конфиг Xray: вход из TUN, выход — сервер из ссылки vless://.
+func BuildXrayConfig(link string, mtu int) ([]byte, error) {
+	return buildXrayConfig(link, mtu, xrayTunName())
+}
+
+// tunName "" — без входа TUN: для проверки ссылки, Xray при этом не создаёт интерфейс
+func buildXrayConfig(link string, mtu int, tunName string) ([]byte, error) {
 	v, err := ParseVLESS(link)
 	if err != nil {
 		return nil, err
@@ -57,12 +72,12 @@ func buildXrayConfig(link string, mtu int, withTun bool) ([]byte, error) {
 			map[string]any{"tag": "direct", "protocol": "freedom"},
 		},
 	}
-	if withTun {
+	if tunName != "" {
 		cfg["inbounds"] = []any{map[string]any{
 			"tag":      "tun",
 			"port":     0,
 			"protocol": "tun",
-			"settings": map[string]any{"name": "utun99", "MTU": mtu}, // имя не используется: интерфейс приходит через xray.tun.fd
+			"settings": map[string]any{"name": tunName, "MTU": mtu},
 			// Домен из TLS/HTTP — Xray видит, куда идёт соединение, а не только IP
 			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true},
 		}}
@@ -140,7 +155,8 @@ func (x *xrayInstance) Close() error {
 	return err
 }
 
-// startXray запускает Xray на уже созданном TUN (fd) с сервером из ссылки.
+// startXray запускает Xray с сервером из ссылки. tunFd — уже созданный TUN
+// (macOS); 0 — Xray создаёт адаптер сам (Windows).
 func startXray(link string, tunFd uintptr, mtu int, logf wgLogFunc) (*xrayInstance, error) {
 	js, err := BuildXrayConfig(link, mtu)
 	if err != nil {
@@ -153,8 +169,10 @@ func startXray(link string, tunFd uintptr, mtu int, logf wgLogFunc) (*xrayInstan
 
 	xrayStartMu.Lock()
 	defer xrayStartMu.Unlock()
-	os.Setenv(xrayTunFdEnv, strconv.Itoa(int(tunFd)))
-	defer os.Unsetenv(xrayTunFdEnv)
+	if tunFd != 0 {
+		os.Setenv(xrayTunFdEnv, strconv.Itoa(int(tunFd)))
+		defer os.Unsetenv(xrayTunFdEnv)
+	}
 
 	inst, err := core.New(cfg)
 	if err != nil {
@@ -181,7 +199,7 @@ func (h xrayLogHandler) Handle(msg xlog.Message) {
 
 // CheckXrayLink проверяет, что из ссылки собирается рабочий конфиг Xray.
 func CheckXrayLink(link string) error {
-	js, err := buildXrayConfig(link, 1400, false)
+	js, err := buildXrayConfig(link, 1400, "")
 	if err != nil {
 		return err
 	}
