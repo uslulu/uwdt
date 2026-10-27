@@ -25,6 +25,7 @@ func (a *App) watchUpdates() {
 		info, err := CheckUpdate(Version)
 		if err != nil {
 			log.Printf("[UPDATE] Проверка не удалась: %v", err)
+			last = time.Time{} // сеть могла перестраиваться — повторим на следующем тике, а не через час
 			return
 		}
 		if !info.Available {

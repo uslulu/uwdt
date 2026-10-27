@@ -8,6 +8,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"net/netip"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -45,13 +46,16 @@ func (w *WG) applyXrayWindows(link string, serverIPs []string, logf wgLogFunc) e
 	}
 	removeExcludes := func() { _, _ = bulkRoutes(false, gw, all) }
 
+	// Своё имя адаптера на каждый запуск: если прошлый почему-то не закрылся,
+	// Xray не подхватит его по имени (с занятой сессией запуск зависал)
+	name := nextXrayAdapterName()
 	logf("Запуск Xray…")
-	x, err := startXray(link, 0, xrayMTU, logf)
+	x, err := startXray(link, 0, name, xrayMTU, logf)
 	if err != nil {
 		removeExcludes()
 		return err
 	}
-	luid, err := xrayAdapterLUID()
+	luid, err := xrayAdapterLUID(name)
 	if err == nil {
 		err = configureXrayAdapter(luid)
 	}
@@ -70,15 +74,21 @@ func (w *WG) applyXrayWindows(link string, serverIPs []string, logf wgLogFunc) e
 	w.refreshStop = make(chan struct{})
 	go w.excludeRefreshLoop(w.refreshStop, logf)
 
-	logf(fmt.Sprintf("Туннель %s (Xray) поднят", xrayTunName()))
+	logf(fmt.Sprintf("Туннель %s (Xray) поднят", name))
 	go w.RefreshExcludes(logf)
 	return nil
 }
 
+var xrayAdapterSeq atomic.Uint32
+
+func nextXrayAdapterName() string {
+	return fmt.Sprintf("%s-%d", xrayTunName(), xrayAdapterSeq.Add(1))
+}
+
 // xrayAdapterLUID — LUID адаптера, который создал Xray: его GUID — md5 от имени
 // (так делает Xray в proxy/tun/tun_windows.go).
-func xrayAdapterLUID() (winipcfg.LUID, error) {
-	id := md5.Sum([]byte(xrayTunName()))
+func xrayAdapterLUID(name string) (winipcfg.LUID, error) {
+	id := md5.Sum([]byte(name))
 	guid := (*windows.GUID)(unsafe.Pointer(&id[0]))
 	return winipcfg.LUIDFromGUID(guid)
 }

@@ -402,13 +402,27 @@ func DiffCIDRs(old, new []string) (add, del []string) { return diffCIDRs(old, ne
 
 // excludeRefreshLoop периодически перерезолвит домены из списка исключений:
 // у сервисов адреса меняются, а маршрут привязан к адресу.
+// excludeEarlyRetries — повторы вскоре после подъёма туннеля (паузы между
+// ними): первый запрос к RIPE и DNS часто попадает на перестройку маршрутов и
+// не проходит, а без повтора сети AS шли бы через туннель до планового обновления
+var excludeEarlyRetries = []time.Duration{20 * time.Second, 70 * time.Second}
+
 func (w *WG) excludeRefreshLoop(stop chan struct{}, logf wgLogFunc) {
 	t := time.NewTicker(excludeRefreshInterval)
 	defer t.Stop()
+	early := excludeEarlyRetries
+	retry := time.After(early[0])
 	for {
 		select {
 		case <-stop:
 			return
+		case <-retry:
+			w.RefreshExcludes(logf)
+			if early = early[1:]; len(early) > 0 {
+				retry = time.After(early[0])
+			} else {
+				retry = nil
+			}
 		case <-t.C:
 			w.RefreshExcludes(logf)
 		}

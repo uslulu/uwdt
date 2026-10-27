@@ -8,18 +8,24 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"unsafe"
 
 	xlog "github.com/xtls/xray-core/common/log"
 	core "github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
+	"github.com/xtls/xray-core/proxy"
 )
 
 const (
@@ -135,7 +141,10 @@ func (v *VLESS) streamSettings() (map[string]any, error) {
 }
 
 // xrayInstance — запущенный Xray; Close останавливает его (дескриптор TUN закрывает вызывающий).
-type xrayInstance struct{ inst *core.Instance }
+type xrayInstance struct {
+	inst  *core.Instance
+	tunIn any // TUN-вход (*tun.Handler): его стек и интерфейс закрываем сами
+}
 
 // Остановленные экземпляры держим до конца работы приложения. Xray оборачивает
 // переданный fd в свой os.File и не закрывает его (fd наш), а финализатор этого
@@ -149,16 +158,81 @@ var (
 
 func (x *xrayInstance) Close() error {
 	err := x.inst.Close()
+	// xray-core v1.260327.0: у TUN-входа нет Close, а inst.Close закрывает
+	// только workers и mux — адаптер, его маршруты и стек gVisor оставались
+	// жить, трафик шёл в «зомби», следующий запуск зависал на занятом адаптере
+	if x.tunIn != nil {
+		if cerr := closeTunInbound(x.tunIn); cerr != nil && err == nil {
+			err = cerr
+		}
+	}
+	xlog.RegisterHandler(discardLog{}) // записи остановленного Xray не должны попадать в чужую сессию
 	retiredMu.Lock()
 	retiredXray = append(retiredXray, x.inst)
 	retiredMu.Unlock()
 	return err
 }
 
+// tunInbound — TUN-вход Xray (*tun.Handler) по тегу «tun».
+func tunInbound(inst *core.Instance) any {
+	m, ok := inst.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	if !ok {
+		return nil
+	}
+	h, err := m.GetHandler(context.Background(), "tun")
+	if err != nil {
+		return nil
+	}
+	if gi, ok := h.(proxy.GetInbound); ok {
+		return gi.GetInbound()
+	}
+	return nil
+}
+
+// closeTunInbound закрывает стек gVisor и интерфейс TUN-входа. Поля
+// неэкспортируемые (Handler.stack, stackGVisor.tun) — достаём через reflect;
+// версия xray-core закреплена в go.mod, имена полей проверяет тест.
+func closeTunInbound(h any) error {
+	st, err := unexportedField(h, "stack")
+	if err != nil {
+		return err
+	}
+	var errs []string
+	tunIf, terr := unexportedField(st, "tun")
+	if c, ok := st.(io.Closer); ok {
+		if err := c.Close(); err != nil {
+			errs = append(errs, "стек: "+err.Error())
+		}
+	}
+	if terr != nil {
+		errs = append(errs, terr.Error())
+	} else if c, ok := tunIf.(io.Closer); ok {
+		if err := c.Close(); err != nil {
+			errs = append(errs, "интерфейс: "+err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("закрытие TUN Xray: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func unexportedField(obj any, name string) (any, error) {
+	v := reflect.ValueOf(obj)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return nil, fmt.Errorf("закрытие TUN Xray: %T — не указатель", obj)
+	}
+	f := v.Elem().FieldByName(name)
+	if !f.IsValid() {
+		return nil, fmt.Errorf("закрытие TUN Xray: у %T нет поля %s (сменилась версия xray-core?)", obj, name)
+	}
+	return reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Interface(), nil
+}
+
 // startXray запускает Xray с сервером из ссылки. tunFd — уже созданный TUN
-// (macOS); 0 — Xray создаёт адаптер сам (Windows).
-func startXray(link string, tunFd uintptr, mtu int, logf wgLogFunc) (*xrayInstance, error) {
-	js, err := BuildXrayConfig(link, mtu)
+// (macOS); 0 — Xray сам создаёт адаптер tunName (Windows).
+func startXray(link string, tunFd uintptr, tunName string, mtu int, logf wgLogFunc) (*xrayInstance, error) {
+	js, err := buildXrayConfig(link, mtu, tunName)
 	if err != nil {
 		return nil, err
 	}
@@ -178,24 +252,30 @@ func startXray(link string, tunFd uintptr, mtu int, logf wgLogFunc) (*xrayInstan
 	if err != nil {
 		return nil, fmt.Errorf("Xray: %w", err)
 	}
+	x := &xrayInstance{inst: inst, tunIn: tunInbound(inst)}
 	if err := inst.Start(); err != nil {
-		(&xrayInstance{inst}).Close()
+		x.Close()
 		return nil, fmt.Errorf("запуск Xray: %w", err)
 	}
 	// Предупреждения и ошибки Xray — в журнал сессии (обработчик ставим после
 	// Start: модуль логов Xray при старте заменяет свой)
 	xlog.RegisterHandler(xrayLogHandler{logf})
-	return &xrayInstance{inst}, nil
+	return x, nil
 }
 
+// xrayLogHandler пропускает только предупреждения и ошибки. Записи о каждом
+// соединении (AccessMessage) идут сотнями в минуту — их не пишем.
 type xrayLogHandler struct{ logf wgLogFunc }
 
 func (h xrayLogHandler) Handle(msg xlog.Message) {
-	if m, ok := msg.(*xlog.GeneralMessage); ok && m.Severity > xlog.Severity_Warning {
-		return // info и debug не пишем
+	if m, ok := msg.(*xlog.GeneralMessage); ok && m.Severity <= xlog.Severity_Warning {
+		h.logf(msg.String())
 	}
-	h.logf("[XRAY] " + msg.String())
 }
+
+type discardLog struct{}
+
+func (discardLog) Handle(xlog.Message) {}
 
 // CheckXrayLink проверяет, что из ссылки собирается рабочий конфиг Xray.
 func CheckXrayLink(link string) error {

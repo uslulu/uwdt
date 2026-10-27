@@ -131,7 +131,7 @@ func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) er
 	}
 
 	logf("Запуск Xray…")
-	x, err := startXray(link, h.file.Fd(), xrayMTU, logf)
+	x, err := startXray(link, h.file.Fd(), xrayTunName(), xrayMTU, logf)
 	if err != nil {
 		h.file.Close()
 		h.conn.Close()
