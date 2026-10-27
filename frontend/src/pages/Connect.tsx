@@ -141,6 +141,24 @@ function StatsCard({ stats, active }: { stats: TunnelStats | null; active: boole
   );
 }
 
+// Список серверов по разделам: VK TURN отдельно, каждая подписка — своим разделом
+function groupServers(servers: Server[]) {
+  const groups: { key: string; title: string; items: Server[] }[] = [];
+  const turn = servers.filter(s => s.kind !== 'xray');
+  if (turn.length > 0) groups.push({ key: 'turn', title: 'VK TURN', items: turn });
+  for (const s of servers) {
+    if (s.kind !== 'xray') continue;
+    const key = s.subUrl ?? 'vless';
+    let g = groups.find(x => x.key === key);
+    if (!g) {
+      g = { key, title: s.group || 'Серверы VLESS', items: [] };
+      groups.push(g);
+    }
+    g.items.push(s);
+  }
+  return groups;
+}
+
 function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, onIconClick, onEdit, onRemove }: {
   servers: Server[]; selected: Server | null; listOpen: boolean;
   onToggleList: () => void; onSelect: (s: Server) => void;
@@ -151,7 +169,15 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
     <div className="status-bar">
       {listOpen && servers.length > 0 && (
         <div className="server-list">
-          {servers.map(s => (
+          {groupServers(servers).map((g, _, all) => (
+          <div key={g.key} className="server-section">
+          {all.length > 1 && (
+            <div className="server-section-title">
+              {g.title}
+              <span className="server-section-count">{g.items.length}</span>
+            </div>
+          )}
+          {g.items.map(s => (
             <div
               key={s.id}
               className={`server-item${s.id === selected?.id ? ' server-item--active' : ''}`}
@@ -164,10 +190,7 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
               <button type="button" className="server-icon-btn" onClick={(e) => { e.stopPropagation(); onIconClick(e, s); }} aria-label="Выбрать иконку">
                 <ServerIcon iconKey={s.icon} size={20} />
               </button>
-              <span className="status-name">
-                {s.name}
-                {s.group && <small className="server-group">{s.group}</small>}
-              </span>
+              <span className="status-name">{s.name}</span>
               {s.kind === 'xray' ? (
                 <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onRemove(s); }} aria-label="Удалить">
                   <IconTrash size={15} stroke={2} />
@@ -178,6 +201,8 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
                 </button>
               )}
             </div>
+          ))}
+          </div>
           ))}
         </div>
       )}
