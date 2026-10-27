@@ -190,6 +190,11 @@ func (a *App) FetchSubscription(url string) (*Subscription, error) {
 	return FetchSubscription(url)
 }
 
+// PingServers — задержка до серверов подписки в мс (-1 — не ответил).
+func (a *App) PingServers(links []string) map[string]int {
+	return PingXray(links)
+}
+
 // ConnectXray подключает к серверу из подписки (ссылка vless://).
 func (a *App) ConnectXray(link, name string) error {
 	return a.bridge.ConnectXray(link, name)

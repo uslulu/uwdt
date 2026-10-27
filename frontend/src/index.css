@@ -19,6 +19,33 @@
   src: url('/fonts/Geist-700.woff2') format('woff2');
 }
 
+/* Флаги стран (🇩🇪 в названиях серверов): в Windows нет шрифта с флагами, там
+   вместо них буквы «DE». Twemoji Country Flags — только символы флагов, остальное
+   по-прежнему Geist. Шрифт: Twemoji (CC-BY 4.0) из country-flag-emoji-polyfill (MIT) */
+@font-face {
+  font-family: 'Geist';
+  font-weight: 500;
+  font-display: block;
+  src: url('/fonts/TwemojiCountryFlags.woff2') format('woff2');
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
+}
+
+@font-face {
+  font-family: 'Geist';
+  font-weight: 600;
+  font-display: block;
+  src: url('/fonts/TwemojiCountryFlags.woff2') format('woff2');
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
+}
+
+@font-face {
+  font-family: 'Geist';
+  font-weight: 700;
+  font-display: block;
+  src: url('/fonts/TwemojiCountryFlags.woff2') format('woff2');
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
+}
+
 :root {
   color-scheme: light;
   --bg: #f3f7fb;

@@ -41,6 +41,8 @@ export function Startup(arg1:context.Context):Promise<void>;
 
 export function ASNames(arg1:Array<string>):Promise<Record<string, string>>;
 
+export function PingServers(arg1:Array<string>):Promise<Record<string, number>>;
+
 export function ConnectXray(arg1:string,arg2:string):Promise<void>;
 
 export function FetchSubscription(arg1:string):Promise<backend.Subscription>;

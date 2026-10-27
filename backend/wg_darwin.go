@@ -138,6 +138,16 @@ func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) er
 		return err
 	}
 
+	// DNS — через туннель, если его не обслуживает другой VPN (Cisco): DNS
+	// банка трогать нельзя, иначе отвалятся его внутренние адреса
+	if dnsByOtherVPN(logf) {
+		logf("DNS обслуживает другой VPN — оставляю его")
+	} else if _, err := h.conn.Write([]byte("dns " + strings.Join(tunnelDNSDefault, ",") + "\n")); err != nil {
+		logf("DNS туннеля: " + err.Error())
+	} else {
+		logHelperReply(h.conn, logf) // ответ помощника: поставил или почему нет
+	}
+
 	w.stateMu.Lock()
 	w.activeXray = x
 	w.activeTunFile = h.file
@@ -147,6 +157,34 @@ func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) er
 	logf(fmt.Sprintf("Туннель %s (Xray) поднят, маршруты: %v", h.name, tunnels))
 	go w.RefreshExcludes(logf)
 	return nil
+}
+
+// logHelperReply выводит в журнал сообщения помощника, пришедшие в ответ на команду.
+func logHelperReply(conn *net.UnixConn, logf wgLogFunc) {
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return
+	}
+	for _, line := range bytes.Split(buf[:n], []byte("\n")) {
+		var msg wgHelperMsg
+		if json.Unmarshal(line, &msg) == nil && msg.Log != "" {
+			logf(msg.Log)
+		}
+	}
+}
+
+// dnsByOtherVPN — какой-то из DNS-серверов системы ходит через другой VPN (utun).
+func dnsByOtherVPN(logf wgLogFunc) bool {
+	for _, dns := range localDNSServers() {
+		if iface := routeIfaceDarwin(dns); strings.HasPrefix(iface, "utun") {
+			logf(fmt.Sprintf("DNS %s обслуживает %s", dns, iface))
+			return true
+		}
+	}
+	return false
 }
 
 // tunHelper — интерфейс от root-помощника: fd utun, его имя, связь с помощником
@@ -541,6 +579,14 @@ func cleanupStaleExcludeRoutesDarwin(logf wgLogFunc) {
 	logf("Протухшие маршруты удалены")
 }
 
+func cmdOutputDarwin(name string, args ...string) (string, error) {
+	out, err := exec.Command(name, args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s %v: %w — %s", name, args, err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
 func runCmdDarwin(name string, args ...string) error {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
@@ -672,13 +718,23 @@ func RunWGHelperDarwin(args []string) {
 	go g.watch(stop)
 
 	// Команды приложения: "add CIDR" / "del CIDR" — правка исключений на лету,
+	// "dns A,B" — DNS туннеля для основной сети (режим подписки),
 	// "down" или обрыв соединения (краш приложения) → уборка
+	var dns dnsOverride
+	defer dns.restore()
 	reader := bufio.NewReader(hconn)
 	for {
 		line, err := reader.ReadString('\n')
 		f := strings.Fields(line)
 		if len(f) == 1 && f[0] == "down" {
 			break
+		}
+		if len(f) == 2 && f[0] == "dns" {
+			if derr := dns.set(splitCSV(f[1])); derr != nil {
+				send(wgHelperMsg{Log: "DNS туннеля не поставлен: " + derr.Error()}, -1)
+			} else {
+				send(wgHelperMsg{Log: fmt.Sprintf("DNS через туннель: %s (служба %s)", f[1], dns.service)}, -1)
+			}
 		}
 		if len(f) == 2 && (f[0] == "add" || f[0] == "del") {
 			g.apply(f[0], f[1])

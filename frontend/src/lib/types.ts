@@ -13,6 +13,7 @@ export interface Server {
   link?: string;
   group?: string;
   subUrl?: string;
+  subUpdated?: number; // когда подписку последний раз скачивали (мс)
   transport?: string;
 }
 

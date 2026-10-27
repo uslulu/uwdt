@@ -174,3 +174,7 @@ wails build -platform darwin/universal
 ## Лицензия
 
 Этот проект распространяется под лицензией GNU General Public License v3.0.
+
+Сторонние компоненты:
+- [Xray-core](https://github.com/XTLS/Xray-core) — MPL-2.0 (подключение по подпискам VLESS).
+- Шрифт флагов стран из [country-flag-emoji-polyfill](https://github.com/talkjs/country-flag-emoji-polyfill) (MIT); изображения флагов — [Twemoji](https://github.com/jdecked/twemoji), CC-BY 4.0.

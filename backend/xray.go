@@ -23,6 +23,7 @@ import (
 	xlog "github.com/xtls/xray-core/common/log"
 	core "github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/inbound"
+	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"github.com/xtls/xray-core/proxy"
@@ -76,7 +77,16 @@ func buildXrayConfig(link string, mtu int, tunName string) ([]byte, error) {
 		"outbounds": []any{
 			map[string]any{"tag": "proxy", "protocol": "vless", "settings": user, "streamSettings": stream},
 			map[string]any{"tag": "direct", "protocol": "freedom"},
+			map[string]any{"tag": "block", "protocol": "blackhole"},
 		},
+		// Торренты на сервер подписки не пускаем: раздачи отслеживают, и жалобы
+		// правообладателей уходят хостеру сервера — он его отключит
+		"routing": map[string]any{"rules": []any{
+			map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
+		}},
+		// Счётчики трафика сервера — для карточки скорости
+		"stats":  map[string]any{},
+		"policy": map[string]any{"system": map[string]any{"statsOutboundUplink": true, "statsOutboundDownlink": true}},
 	}
 	if tunName != "" {
 		cfg["inbounds"] = []any{map[string]any{
@@ -85,7 +95,7 @@ func buildXrayConfig(link string, mtu int, tunName string) ([]byte, error) {
 			"protocol": "tun",
 			"settings": map[string]any{"name": tunName, "MTU": mtu},
 			// Домен из TLS/HTTP — Xray видит, куда идёт соединение, а не только IP
-			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true},
+			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic", "bittorrent"}, "routeOnly": true},
 		}}
 	}
 	return json.MarshalIndent(cfg, "", "  ")
@@ -166,11 +176,26 @@ func (x *xrayInstance) Close() error {
 			err = cerr
 		}
 	}
-	xlog.RegisterHandler(discardLog{}) // записи остановленного Xray не должны попадать в чужую сессию
+	setXrayLog(discardLog{}) // записи остановленного Xray не должны попадать в чужую сессию
 	retiredMu.Lock()
 	retiredXray = append(retiredXray, x.inst)
 	retiredMu.Unlock()
 	return err
+}
+
+// Traffic — байты, переданные на сервер и полученные от него с начала сессии.
+func (x *xrayInstance) Traffic() (up, down int64) {
+	m, ok := x.inst.GetFeature(stats.ManagerType()).(stats.Manager)
+	if !ok {
+		return 0, 0
+	}
+	if c := m.GetCounter("outbound>>>proxy>>>traffic>>>uplink"); c != nil {
+		up = c.Value()
+	}
+	if c := m.GetCounter("outbound>>>proxy>>>traffic>>>downlink"); c != nil {
+		down = c.Value()
+	}
+	return up, down
 }
 
 // tunInbound — TUN-вход Xray (*tun.Handler) по тегу «tun».
@@ -259,8 +284,28 @@ func startXray(link string, tunFd uintptr, tunName string, mtu int, logf wgLogFu
 	}
 	// Предупреждения и ошибки Xray — в журнал сессии (обработчик ставим после
 	// Start: модуль логов Xray при старте заменяет свой)
-	xlog.RegisterHandler(xrayLogHandler{logf})
+	setXrayLog(xrayLogHandler{logf})
 	return x, nil
+}
+
+// Обработчик логов в Xray один на процесс, и каждый Start (в том числе
+// проверки пинга) ставит свой — после них возвращаем обработчик сессии.
+var (
+	xrayLogMu      sync.Mutex
+	xrayLogCurrent xlog.Handler = discardLog{}
+)
+
+func setXrayLog(h xlog.Handler) {
+	xrayLogMu.Lock()
+	xrayLogCurrent = h
+	xlog.RegisterHandler(h)
+	xrayLogMu.Unlock()
+}
+
+func restoreXrayLog() {
+	xrayLogMu.Lock()
+	xlog.RegisterHandler(xrayLogCurrent)
+	xrayLogMu.Unlock()
 }
 
 // xrayLogHandler пропускает только предупреждения и ошибки. Записи о каждом

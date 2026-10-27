@@ -68,3 +68,28 @@ func TestXrayLiveSubscription(t *testing.T) {
 		inst.Close()
 	}
 }
+
+func TestPingXrayLive(t *testing.T) {
+	path := os.Getenv("UWDT_LIVE_SUB")
+	if path == "" {
+		t.Skip("UWDT_LIVE_SUB не задан")
+	}
+	body, _ := os.ReadFile(path)
+	sub := backend.ParseSubscription(string(body))
+	var links []string
+	for _, s := range sub.Servers {
+		links = append(links, s.Link)
+	}
+	// 192.0.2.1 — адрес из документационной сети, не отвечает никогда
+	const dead = "vless://11111111-2222-3333-4444-555555555555@192.0.2.1:443?type=tcp&security=reality&sni=a.com&pbk=bmXOC-gsYBnUzqfQ7J6Hv0Tg8ApEMTx3jJbW6bBV4lA#dead"
+	res := backend.PingXray(append(links, dead))
+	for _, s := range sub.Servers {
+		if res[s.Link] <= 0 {
+			t.Errorf("%s: нет ответа", s.Name)
+		}
+		t.Logf("%-28s %d мс", s.Name, res[s.Link])
+	}
+	if v := res[dead]; v != -1 {
+		t.Errorf("недоступный сервер: %d, want -1", v)
+	}
+}

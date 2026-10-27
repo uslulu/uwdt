@@ -5,7 +5,7 @@ import {
   IconFlameFilled, IconShieldFilled, IconLayoutGridFilled, IconCloudFilled, IconBrandSpeedtest,
   IconStarFilled, IconHeartFilled, IconBoltFilled, IconRocket,
   IconCrownFilled, IconDiamondFilled, IconLeafFilled, IconSnowflake,
-  IconServer, IconGlobe, IconLockFilled, IconWifi, IconTrash,
+  IconServer, IconGlobe, IconLockFilled, IconWifi, IconTrash, IconRefresh, IconBrandVk, IconListDetails,
 } from '@tabler/icons-react';
 import AddServer from '../modals/Add-server';
 import EditServer from '../modals/Edit-server';
@@ -16,7 +16,7 @@ import { logStore } from '../lib/stores/logStore';
 import { wdttLinkStore } from '../lib/utils/wdttLink';
 import { SaveProfile } from '../../wailsjs/go/backend/App';
 import type { Server, TunnelState } from '../lib/types';
-import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles, ConnectXray } from '../../wailsjs/go/backend/App';
+import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles, ConnectXray, FetchSubscription, PingServers, GetRussiaDirect } from '../../wailsjs/go/backend/App';
 import type { backend } from '../../wailsjs/go/models';
 import Bubble from '../components/Bubble';
 import { statsStore, formatRate, formatDuration, sessionClock, type TunnelStats } from '../lib/stores/statsStore';
@@ -115,7 +115,9 @@ function useSessionDuration(active: boolean) {
   return active && since != null ? formatDuration(now - since) : '0:00';
 }
 
-function StatsCard({ stats, active }: { stats: TunnelStats | null; active: boolean }) {
+const TRANSPORT_LABEL: Record<string, string> = { tcp: 'TCP', raw: 'TCP', xhttp: 'xHTTP', splithttp: 'xHTTP', grpc: 'gRPC', ws: 'WS' };
+
+function StatsCard({ stats, active, transport }: { stats: TunnelStats | null; active: boolean; transport?: string }) {
   const down = formatRate(stats?.downBps ?? 0);
   const up = formatRate(stats?.upBps ?? 0);
   const duration = useSessionDuration(active);
@@ -134,24 +136,35 @@ function StatsCard({ stats, active }: { stats: TunnelStats | null; active: boole
         <span className="stat-value">{up.value} <small>{up.unit}</small></span>
       </div>
       <div className="stat">
-        <span className="stat-label"><IconPlugConnected size={14} stroke={2.2} />Каналы</span>
-        <span className="stat-value">{stats?.active ?? '—'}</span>
+        {transport ? (
+          <>
+            <span className="stat-label"><IconPlugConnected size={14} stroke={2.2} />Протокол</span>
+            <span className="stat-value">{TRANSPORT_LABEL[transport] ?? transport}</span>
+          </>
+        ) : (
+          <>
+            <span className="stat-label"><IconPlugConnected size={14} stroke={2.2} />Каналы</span>
+            <span className="stat-value">{stats?.active ?? '—'}</span>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
 // Список серверов по разделам: VK TURN отдельно, каждая подписка — своим разделом
-function groupServers(servers: Server[]) {
-  const groups: { key: string; title: string; items: Server[] }[] = [];
+type ServerGroup = { key: string; kind: 'turn' | 'sub'; title: string; url?: string; updated?: number; items: Server[] };
+
+function groupServers(servers: Server[]): ServerGroup[] {
+  const groups: ServerGroup[] = [];
   const turn = servers.filter(s => s.kind !== 'xray');
-  if (turn.length > 0) groups.push({ key: 'turn', title: 'VK TURN', items: turn });
+  if (turn.length > 0) groups.push({ key: 'turn', kind: 'turn', title: 'VK TURN', items: turn });
   for (const s of servers) {
     if (s.kind !== 'xray') continue;
     const key = s.subUrl ?? 'vless';
     let g = groups.find(x => x.key === key);
     if (!g) {
-      g = { key, title: s.group || 'Серверы VLESS', items: [] };
+      g = { key, kind: 'sub', title: s.group || 'Серверы VLESS', url: s.subUrl, updated: s.subUpdated, items: [] };
       groups.push(g);
     }
     g.items.push(s);
@@ -159,50 +172,94 @@ function groupServers(servers: Server[]) {
   return groups;
 }
 
-function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, onIconClick, onEdit, onRemove }: {
+const plural = (n: number, one: string, few: string, many: string) => {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+};
+const serversCount = (n: number) => `${n} ${plural(n, 'сервер', 'сервера', 'серверов')}`;
+
+// Сегодня — время, раньше — дата: подпись раздела должна помещаться в строку
+const fmtDate = (t?: number) => {
+  if (!t) return '';
+  const d = new Date(t);
+  return d.toDateString() === new Date().toDateString()
+    ? 'в ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+};
+
+// Задержка до сервера подписки: зелёная/жёлтая/красная пилюля
+function PingBadge({ ms, pinging }: { ms?: number; pinging: boolean }) {
+  if (ms === undefined) return pinging ? <span className="ping ping--wait">…</span> : null;
+  if (ms < 0) return <span className="ping ping--dead" title="Сервер не ответил">нет ответа</span>;
+  const cls = ms < 400 ? 'good' : ms < 900 ? 'mid' : 'slow';
+  return <span className={`ping ping--${cls}`} title="Задержка запроса через сервер">{ms} мс</span>;
+}
+
+// Метка способа подключения на нижней панели
+const modeLabel = (s: Server) => (s.kind === 'xray' ? s.group || 'VLESS' : 'VK TURN');
+
+function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, onIconClick, onEdit, onRemove, pings, pinging, busySub, onRefreshSub, onDeleteSub }: {
   servers: Server[]; selected: Server | null; listOpen: boolean;
   onToggleList: () => void; onSelect: (s: Server) => void;
   onIconClick: (e: React.MouseEvent, s: Server) => void; onEdit: (s: Server) => void;
   onRemove: (s: Server) => void;
+  pings: Record<string, number>; pinging: boolean; busySub: string | null;
+  onRefreshSub: (url: string) => void; onDeleteSub: (g: ServerGroup) => void;
 }) {
   return (
     <div className="status-bar">
       {listOpen && servers.length > 0 && (
         <div className="server-list">
-          {groupServers(servers).map((g, _, all) => (
-          <div key={g.key} className="server-section">
-          {all.length > 1 && (
-            <div className="server-section-title">
-              {g.title}
-              <span className="server-section-count">{g.items.length}</span>
-            </div>
-          )}
-          {g.items.map(s => (
-            <div
-              key={s.id}
-              className={`server-item${s.id === selected?.id ? ' server-item--active' : ''}`}
-              style={{ cursor: 'pointer' }}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(s)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(s); }}
-            >
-              <button type="button" className="server-icon-btn" onClick={(e) => { e.stopPropagation(); onIconClick(e, s); }} aria-label="Выбрать иконку">
-                <ServerIcon iconKey={s.icon} size={20} />
-              </button>
-              <span className="status-name">{s.name}</span>
-              {s.kind === 'xray' ? (
-                <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onRemove(s); }} aria-label="Удалить">
-                  <IconTrash size={15} stroke={2} />
-                </button>
-              ) : (
-                <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onEdit(s); }} aria-label="Редактировать">
-                  <IconPencil size={15} stroke={2} />
-                </button>
-              )}
-            </div>
-          ))}
-          </div>
+          {groupServers(servers).map(g => (
+            <section key={g.key} className={`server-section server-section--${g.kind}`}>
+              <div className="ss-head">
+                <span className="ss-icon">{g.kind === 'turn' ? <IconBrandVk size={16} stroke={2} /> : <IconListDetails size={16} stroke={2} />}</span>
+                <span className="ss-text">
+                  <span className="ss-title">{g.title}</span>
+                  <span className="ss-sub">
+                    {g.kind === 'turn' ? `Звонки ВК · ${serversCount(g.items.length)}` : `Подписка · ${serversCount(g.items.length)}${g.updated ? ` · обновлена ${fmtDate(g.updated)}` : ''}`}
+                  </span>
+                </span>
+                {g.kind === 'sub' && g.url && (
+                  <>
+                    <button type="button" className={`ss-btn${busySub === g.url ? ' ss-btn--spin' : ''}`} onClick={() => onRefreshSub(g.url!)} disabled={busySub === g.url} title="Обновить подписку и пинг" aria-label="Обновить подписку">
+                      <IconRefresh size={15} stroke={2} />
+                    </button>
+                    <button type="button" className="ss-btn ss-btn--danger" onClick={() => onDeleteSub(g)} title="Удалить подписку" aria-label="Удалить подписку">
+                      <IconTrash size={15} stroke={2} />
+                    </button>
+                  </>
+                )}
+              </div>
+              {g.items.map(s => (
+                <div
+                  key={s.id}
+                  className={`server-item${s.id === selected?.id ? ' server-item--active' : ''}`}
+                  style={{ cursor: 'pointer' }}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelect(s)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(s); }}
+                >
+                  <button type="button" className="server-icon-btn" onClick={(e) => { e.stopPropagation(); onIconClick(e, s); }} aria-label="Выбрать иконку">
+                    <ServerIcon iconKey={s.icon} size={20} />
+                  </button>
+                  <span className="status-name">{s.name}</span>
+                  {s.kind === 'xray' && <PingBadge ms={s.link ? pings[s.link] : undefined} pinging={pinging} />}
+                  {s.kind === 'xray' ? (
+                    <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onRemove(s); }} aria-label="Удалить сервер">
+                      <IconTrash size={15} stroke={2} />
+                    </button>
+                  ) : (
+                    <button type="button" className="server-edit-btn" onClick={(e) => { e.stopPropagation(); onEdit(s); }} aria-label="Редактировать">
+                      <IconPencil size={15} stroke={2} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </section>
           ))}
         </div>
       )}
@@ -210,6 +267,7 @@ function ServerSelector({ servers, selected, listOpen, onToggleList, onSelect, o
       <button type="button" className={`status-server${!selected ? ' status-server--empty' : ''}`} onClick={onToggleList}>
         <ServerIcon iconKey={selected?.icon} size={20} />
         <span className="status-name">{selected ? selected.name : 'Нет серверов'}</span>
+        {selected && <span className={`mode-chip mode-chip--${selected.kind === 'xray' ? 'sub' : 'turn'}`}>{modeLabel(selected)}</span>}
         <IconChevronUp
           size={16}
           style={{ transform: listOpen ? 'rotate(0deg)' : 'rotate(180deg)', transition: 'transform 0.2s' }}
@@ -377,6 +435,11 @@ export default function Connect() {
     if (connectingRef.current) return; // guard от двойного клика
     connectingRef.current = true;
     if (cur.kind === 'xray') {
+      // Российские сервисы сообщают IP VPN-серверов в РКН — без «Россия напрямую»
+      // они увидят адрес твоего сервера
+      GetRussiaDirect().then(r => {
+        if (r && !r.enabled) toastStore.show('«Россия напрямую» выключена — российские сайты увидят IP сервера подписки. Включите в «Исключениях».', 8000);
+      }).catch(() => {});
       tunnelStore.set('connecting');
       logStore.clear();
       try {
@@ -453,17 +516,100 @@ export default function Connect() {
   };
 
   // Подписку добавляем целиком; повторная загрузка той же ссылки заменяет её серверы
-  const handleAddSubscription = (sub: backend.Subscription) => {
-    const others = serverStore.getAll().filter(s => s.subUrl !== sub.url);
-    const prevSelected = selected?.subUrl === sub.url ? selected.name : null;
-    const added: Server[] = sub.servers.map(x => ({
-      id: crypto.randomUUID(), name: x.name, host: x.host, password: '', icon: 'globe',
-      kind: 'xray', link: x.link, transport: x.transport, group: sub.title, subUrl: sub.url,
-    }));
-    serverStore.save([...others, ...added]);
+  // (иконки и выбранный сервер сохраняются по имени)
+  const applySubscription = (sub: backend.Subscription, silent = false) => {
+    const all = serverStore.getAll();
+    const old = all.filter(s => s.subUrl === sub.url);
+    const firstIdx = all.findIndex(s => s.subUrl === sub.url);
+    const others = all.filter(s => s.subUrl !== sub.url);
+    const now = Date.now();
+    const fresh: Server[] = sub.servers.map(x => {
+      const prev = old.find(o => o.name === x.name);
+      return {
+        id: prev?.id ?? crypto.randomUUID(), name: x.name, host: x.host, password: '', icon: prev?.icon ?? 'globe',
+        kind: 'xray', link: x.link, transport: x.transport, group: sub.title, subUrl: sub.url, subUpdated: now,
+      };
+    });
+    const at = firstIdx < 0 ? others.length : Math.min(firstIdx, others.length);
+    serverStore.save([...others.slice(0, at), ...fresh, ...others.slice(at)]);
     setServers(serverStore.getAll());
-    setSelected(added.find(a => a.name === prevSelected) ?? added[0] ?? null);
-    toastStore.show(`«${sub.title}»: серверов ${added.length}${sub.skipped ? `, пропущено ${sub.skipped} (протокол пока не поддерживается)` : ''}`, 4000);
+    const cur = selectedRef.current;
+    if (!silent) {
+      setSelected(fresh.find(a => a.id === cur?.id) ?? fresh[0] ?? cur);
+      toastStore.show(`«${sub.title}»: ${serversCount(fresh.length)}${sub.skipped ? `, пропущено ${sub.skipped} (протокол пока не поддерживается)` : ''}`, 4000);
+    } else if (cur?.subUrl === sub.url) {
+      setSelected(fresh.find(a => a.id === cur.id) ?? cur);
+    }
+  };
+  const handleAddSubscription = (sub: backend.Subscription) => applySubscription(sub);
+
+  const [pings, setPings] = useState<Record<string, number>>({});
+  const [pinging, setPinging] = useState(false);
+  const pingedAtRef = useRef(0);
+  const pingAll = async () => {
+    const links = serverStore.getAll().filter(s => s.kind === 'xray' && s.link).map(s => s.link!);
+    if (links.length === 0 || pinging) return;
+    setPinging(true);
+    setPings({});
+    try {
+      setPings((await PingServers(links)) ?? {});
+      pingedAtRef.current = Date.now();
+    } catch { /* без пинга список всё равно работает */ } finally {
+      setPinging(false);
+    }
+  };
+
+  const [busySub, setBusySub] = useState<string | null>(null);
+  const refreshSub = async (url: string, silent = false) => {
+    setBusySub(url);
+    try {
+      applySubscription(await FetchSubscription(url), silent);
+    } catch (e) {
+      if (!silent) toastStore.show(`Подписка не обновилась: ${String(e)}`, 5000);
+    } finally {
+      setBusySub(null);
+    }
+  };
+
+  // Подписки обновляются сами раз в сутки — при открытии приложения и списка
+  const SUB_TTL = 24 * 60 * 60 * 1000;
+  const refreshStaleSubs = async () => {
+    const stale = new Set(serverStore.getAll().filter(s => s.subUrl && Date.now() - (s.subUpdated ?? 0) > SUB_TTL).map(s => s.subUrl!));
+    for (const url of stale) await refreshSub(url, true);
+  };
+  useEffect(() => { refreshStaleSubs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Пинг — при открытии списка, если прошлый старше двух минут
+  useEffect(() => {
+    if (!listOpen) return;
+    refreshStaleSubs();
+    if (Date.now() - pingedAtRef.current > 2 * 60 * 1000) pingAll();
+  }, [listOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRefreshSub = async (url: string) => {
+    await refreshSub(url);
+    pingAll();
+  };
+
+  // Подписку удаляем целиком, с «Вернуть»
+  const handleDeleteSub = (g: ServerGroup) => {
+    if (tunnelState !== 'idle' && selected?.subUrl === g.url) {
+      toastStore.show('Сначала отключитесь от сервера этой подписки', 4000);
+      return;
+    }
+    const before = serverStore.getAll();
+    serverStore.save(before.filter(s => s.subUrl !== g.url));
+    const all = serverStore.getAll();
+    setServers(all);
+    if (selected?.subUrl === g.url) setSelected(all[0] ?? null);
+    toastStore.show(`Подписка «${g.title}» удалена`, 6000, {
+      label: 'Вернуть',
+      run: () => {
+        if (serverStore.getAll().some(s => s.subUrl === g.url)) return;
+        serverStore.save(before);
+        setServers(serverStore.getAll());
+      },
+    });
   };
 
   // Сервер подписки удаляем сразу, с «Вернуть»
@@ -538,7 +684,7 @@ export default function Connect() {
               : selected.name}
           </div>
           <div className={`hero-stats${tunnelState === 'connected' ? ' hero-stats--on' : ''}`}>
-            <StatsCard stats={stats} active={tunnelState === 'connected'} />
+            <StatsCard stats={stats} active={tunnelState === 'connected'} transport={selected?.kind === 'xray' ? selected.transport : undefined} />
           </div>
         </div>
 
@@ -551,6 +697,11 @@ export default function Connect() {
           onIconClick={handleIconClick}
           onEdit={(s) => setEditServer(s)}
           onRemove={handleRemoveXray}
+          pings={pings}
+          pinging={pinging}
+          busySub={busySub}
+          onRefreshSub={handleRefreshSub}
+          onDeleteSub={handleDeleteSub}
         />
 
         {addServerOpen && <AddServer onClose={() => setAddServerOpen(false)} onAdd={handleAdd} onAddSubscription={handleAddSubscription} />}

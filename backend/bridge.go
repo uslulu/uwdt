@@ -208,9 +208,29 @@ func (b *Bridge) ConnectXray(link, name string) error {
 		default:
 			logf("Туннель активен")
 			b.onEvent("state_changed", "connected")
+			go b.xrayStats(sessID)
 		}
 	}()
 	return nil
+}
+
+// xrayStats раз в 3 с шлёт трафик сервера подписки в карточку скорости (как ядро VK TURN).
+func (b *Bridge) xrayStats(sessID uint64) {
+	t := time.NewTicker(3 * time.Second)
+	defer t.Stop()
+	for range t.C {
+		b.mu.Lock()
+		current := b.session == sessID && b.xray && b.running
+		b.mu.Unlock()
+		if !current {
+			return
+		}
+		up, down, ok := wg.XrayTraffic()
+		if !ok {
+			return
+		}
+		b.onEvent("stats", map[string]any{"active": 1, "bytes_up": up, "bytes_down": down})
+	}
 }
 
 // finishXray закрывает сессию Xray, если она всё ещё текущая.

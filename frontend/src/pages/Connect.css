@@ -33,10 +33,38 @@
 .status-server { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border-2); border-radius: 14px; box-shadow: 0 4px 20px rgba(20,60,110,0.06); padding: 11px 18px; transition: border-color 0.15s; font-size: 15px; color: var(--text); cursor: pointer; width: 100%; font-family: 'Geist', sans-serif; font-weight: 500; }
 .status-server--empty { color: var(--text-4); }
 .status-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Разделы списка серверов: VK TURN и подписки; заголовок прилипает при прокрутке */
-.server-section-title { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; padding: 8px 18px 6px; background: var(--bg-2); border-bottom: 1px solid var(--border-2); font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-3); font-family: 'Geist', sans-serif; }
-.server-section-count { font-weight: 600; color: var(--text-4); }
+/* Разделы списка серверов: VK TURN и подписки. Заголовок раздела — цветная
+   полоса с иконкой, названием, числом серверов и кнопками подписки; прилипает
+   при прокрутке. Цвет различает способ: VK — синий, подписка — фиолетовый. */
+.server-section { --sec: var(--accent); --sec-dim: var(--accent-dim); }
+.server-section--sub { --sec: #8b5cf6; --sec-dim: rgba(139, 92, 246, 0.14); }
+.server-section + .server-section { border-top: 6px solid var(--bg-2); }
+.ss-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border-2); box-shadow: inset 3px 0 0 var(--sec); }
+.ss-icon { flex-shrink: 0; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--sec-dim); color: var(--sec); }
+.ss-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-family: 'Geist', sans-serif; }
+.ss-title { font-size: 13px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-sub { font-size: 11px; font-weight: 500; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-btn { flex-shrink: 0; display: flex; padding: 6px; border: none; border-radius: 8px; background: none; color: var(--text-3); cursor: pointer; transition: color 0.15s, background 0.15s; }
+.ss-btn:hover:not(:disabled) { color: var(--sec); background: var(--sec-dim); }
+.ss-btn--danger:hover:not(:disabled) { color: #ef4444; background: rgba(239, 68, 68, 0.12); }
+.ss-btn:disabled { cursor: default; }
+.ss-btn--spin svg { animation: ss-spin 0.9s linear infinite; }
+@keyframes ss-spin { to { transform: rotate(360deg); } }
 .server-section:last-child .server-item:last-child { border-bottom: none; }
+.server-section--sub .server-item--active { background: var(--sec-dim); }
+
+/* Задержка до сервера подписки */
+.ping { flex-shrink: 0; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; font-family: 'Geist', sans-serif; white-space: nowrap; }
+.ping--good { color: #16a34a; background: rgba(22, 163, 74, 0.12); }
+.ping--mid { color: #ca8a04; background: rgba(202, 138, 4, 0.14); }
+.ping--slow { color: #ea580c; background: rgba(234, 88, 12, 0.13); }
+.ping--dead { color: #ef4444; background: rgba(239, 68, 68, 0.12); }
+.ping--wait { color: var(--text-4); }
+
+/* Способ подключения выбранного сервера — на нижней панели */
+.mode-chip { flex-shrink: 0; max-width: 40%; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; font-family: 'Geist', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mode-chip--turn { color: var(--accent); background: var(--accent-dim); }
+.mode-chip--sub { color: #8b5cf6; background: rgba(139, 92, 246, 0.14); }
 .icon-picker { position: fixed; z-index: 200; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px; box-shadow: var(--shadow); display: grid; grid-template-columns: repeat(6, 36px); gap: 4px; animation: modal-in 0.15s ease-out; }
 .icon-picker-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; color: var(--text); font-size: 18px; }
 .icon-picker-btn:hover { background: var(--bg-3); border-color: var(--border); }

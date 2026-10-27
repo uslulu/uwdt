@@ -97,6 +97,18 @@ func (w *WG) ApplyXray(link string, serverIPs []string, logf wgLogFunc) error {
 	}
 }
 
+// XrayTraffic — трафик сервера подписки с начала сессии; ok=false, если Xray не запущен.
+func (w *WG) XrayTraffic() (up, down int64, ok bool) {
+	w.stateMu.Lock()
+	x, _ := w.activeXray.(*xrayInstance)
+	w.stateMu.Unlock()
+	if x == nil {
+		return 0, 0, false
+	}
+	up, down = x.Traffic()
+	return up, down, true
+}
+
 // CleanupStaleExcludeRoutes убирает exclude-маршруты, оставшиеся после краша
 // прошлого запуска (когда helper не успел сделать уборку). Вызывать при
 // старте приложения; на платформах без такой проблемы — no-op.
