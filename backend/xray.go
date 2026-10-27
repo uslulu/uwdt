@@ -80,7 +80,8 @@ func buildXrayConfig(link string, mtu int, tunName string) ([]byte, error) {
 			map[string]any{"tag": "block", "protocol": "blackhole"},
 		},
 		// Торренты на сервер подписки не пускаем: раздачи отслеживают, и жалобы
-		// правообладателей уходят хостеру сервера — он его отключит
+		// правообладателей уходят хостеру сервера — он его отключит. BitTorrent
+		// Xray распознаёт сам при включённом sniffing; в destOverride его не пишут
 		"routing": map[string]any{"rules": []any{
 			map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
 		}},
@@ -95,7 +96,7 @@ func buildXrayConfig(link string, mtu int, tunName string) ([]byte, error) {
 			"protocol": "tun",
 			"settings": map[string]any{"name": tunName, "MTU": mtu},
 			// Домен из TLS/HTTP — Xray видит, куда идёт соединение, а не только IP
-			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic", "bittorrent"}, "routeOnly": true},
+			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true},
 		}}
 	}
 	return json.MarshalIndent(cfg, "", "  ")
@@ -324,7 +325,17 @@ func (discardLog) Handle(xlog.Message) {}
 
 // CheckXrayLink проверяет, что из ссылки собирается рабочий конфиг Xray.
 func CheckXrayLink(link string) error {
-	js, err := buildXrayConfig(link, 1400, "")
+	// Полный конфиг, как при подключении, вместе с TUN-входом: его настройки
+	// (sniffing) тоже должен принять Xray. Разбор интерфейс не создаёт
+	js, err := BuildXrayConfig(link, xrayMTU)
+	if err != nil {
+		return err
+	}
+	if _, err := serial.LoadJSONConfig(bytes.NewReader(js)); err != nil {
+		return err
+	}
+	// Сборка модулей — без TUN-входа: core.New с ним создал бы интерфейс
+	js, err = buildXrayConfig(link, xrayMTU, "")
 	if err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -91,5 +92,87 @@ func TestPingXrayLive(t *testing.T) {
 	}
 	if v := res[dead]; v != -1 {
 		t.Errorf("недоступный сервер: %d, want -1", v)
+	}
+}
+
+// Правило про торренты срабатывает: в тесте его выход заменён на прямой (direct),
+// а цель — эхо-сервер на 127.0.0.1, до которого сервер подписки дотянуться не
+// может. BitTorrent-рукопожатие возвращается эхом — значит, правило его поймало;
+// обычный трафик к тому же адресу уходит на сервер и эха нет. (Проверять сам
+// blackhole через сервер нельзя: панели обычно режут торренты и на сервере.)
+func TestXrayLiveTorrentRuleMatches(t *testing.T) {
+	path := os.Getenv("UWDT_LIVE_SUB")
+	if path == "" {
+		t.Skip("UWDT_LIVE_SUB не задан")
+	}
+	body, _ := os.ReadFile(path)
+	sub := backend.ParseSubscription(string(body))
+	js, err := backend.BuildXrayConfig(sub.Servers[0].Link, 1400)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	_ = json.Unmarshal(js, &cfg)
+	in := cfg["inbounds"].([]any)[0].(map[string]any)
+	rule := cfg["routing"].(map[string]any)["rules"].([]any)[0].(map[string]any)
+	if rule["outboundTag"] != "block" {
+		t.Fatalf("правило торрентов ведёт в %v, want block", rule["outboundTag"])
+	}
+	rule["outboundTag"] = "direct"
+
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); io.Copy(c, c) }()
+		}
+	}()
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	port := 21180
+	cfg["inbounds"] = []any{map[string]any{"listen": "127.0.0.1", "port": port, "protocol": "socks", "settings": map[string]any{"udp": false}, "sniffing": in["sniffing"]}}
+	js, _ = json.Marshal(cfg)
+	c, err := serial.LoadJSONConfig(bytes.NewReader(js))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, err := core.New(c)
+	if err == nil {
+		err = inst.Start()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+
+	send := func(payload []byte) []byte {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
+		conn.Write([]byte{5, 1, 0})
+		io.ReadFull(conn, make([]byte, 2))
+		conn.Write([]byte{5, 1, 0, 1, 127, 0, 0, 1, byte(echoPort >> 8), byte(echoPort)})
+		io.ReadFull(conn, make([]byte, 10))
+		conn.Write(payload)
+		buf := make([]byte, 128)
+		n, _ := io.ReadAtLeast(conn, buf, len(payload))
+		return buf[:n]
+	}
+	bt := append([]byte("\x13BitTorrent protocol"), make([]byte, 48)...)
+	if got := send(bt); !bytes.Equal(got, bt) {
+		t.Errorf("правило не поймало BitTorrent: эхо %d байт из %d", len(got), len(bt))
+	}
+	if got := send([]byte("hello uwdt")); len(got) != 0 {
+		t.Errorf("обычный трафик ушёл мимо сервера подписки: %q", got)
 	}
 }
