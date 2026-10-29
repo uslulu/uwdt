@@ -103,6 +103,17 @@ func (w *WG) applyDarwin(confText string, turnIPs []string, logf wgLogFunc) erro
 		return fmt.Errorf("device up: %w", err)
 	}
 
+	// Меняем системный DNS только для полного туннеля: при split tunnel
+	// публичные DNS могут оказаться за пределами AllowedIPs.
+	fullLow, fullHigh := false, false
+	for _, cidr := range tunnels {
+		fullLow = fullLow || cidr == "0.0.0.0/1"
+		fullHigh = fullHigh || cidr == "128.0.0.0/1"
+	}
+	if fullLow && fullHigh {
+		configureTunnelDNSDarwin(h, logf)
+	}
+
 	// Захватываем stateMu только на секцию присвоения состояния: osascript
 	// выше может висеть минутами (диалог пароля) — нельзя блокировать Teardown
 	w.stateMu.Lock()
@@ -138,15 +149,7 @@ func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) er
 		return err
 	}
 
-	// DNS — через туннель, если его не обслуживает другой VPN (Cisco): DNS
-	// банка трогать нельзя, иначе отвалятся его внутренние адреса
-	if dnsByOtherVPN(logf) {
-		logf("DNS обслуживает другой VPN — оставляю его")
-	} else if _, err := h.conn.Write([]byte("dns " + strings.Join(tunnelDNSDefault, ",") + "\n")); err != nil {
-		logf("DNS туннеля: " + err.Error())
-	} else {
-		logHelperReply(h.conn, logf) // ответ помощника: поставил или почему нет
-	}
+	configureTunnelDNSDarwin(h, logf)
 
 	w.stateMu.Lock()
 	w.activeXray = x
@@ -157,6 +160,18 @@ func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) er
 	logf(fmt.Sprintf("Туннель %s (Xray) поднят, маршруты: %v", h.name, tunnels))
 	go w.RefreshExcludes(logf)
 	return nil
+}
+
+// configureTunnelDNSDarwin использует DNS вне встроенных direct-исключений.
+// Настройки сохраняет и восстанавливает root-helper, в том числе при обрыве связи.
+func configureTunnelDNSDarwin(h *tunHelper, logf wgLogFunc) {
+	if dnsByOtherVPN(h.name, logf) {
+		logf("DNS обслуживает другой VPN — оставляю его")
+	} else if _, err := h.conn.Write([]byte("dns " + strings.Join(tunnelDNSDefault, ",") + "\n")); err != nil {
+		logf("DNS туннеля: " + err.Error())
+	} else {
+		logHelperReply(h.conn, logf)
+	}
 }
 
 // logHelperReply выводит в журнал сообщения помощника, пришедшие в ответ на команду.
@@ -177,9 +192,9 @@ func logHelperReply(conn *net.UnixConn, logf wgLogFunc) {
 }
 
 // dnsByOtherVPN — какой-то из DNS-серверов системы ходит через другой VPN (utun).
-func dnsByOtherVPN(logf wgLogFunc) bool {
+func dnsByOtherVPN(ownTun string, logf wgLogFunc) bool {
 	for _, dns := range localDNSServers() {
-		if iface := routeIfaceDarwin(dns); strings.HasPrefix(iface, "utun") {
+		if iface := routeIfaceDarwin(dns); strings.HasPrefix(iface, "utun") && iface != ownTun {
 			logf(fmt.Sprintf("DNS %s обслуживает %s", dns, iface))
 			return true
 		}
