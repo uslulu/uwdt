@@ -497,10 +497,10 @@ export default function Connect() {
 
   const connectingRef = useRef(false);
 
-  const doConnect = async () => {
-    const cur = selectedRef.current;
+  const doConnect = async (target?: Server) => {
+    const cur = target ?? selectedRef.current;
     if (!cur) return;
-    if (tunnelState !== 'idle') return;
+    if (tunnelStore.get() !== 'idle') return;
     if (connectingRef.current) return; // guard от двойного клика
     connectingRef.current = true;
     if (cur.kind === 'xray') {
@@ -575,6 +575,36 @@ export default function Connect() {
         tunnelStore.set('idle');
         reconnectAtRef.current = Date.now() + 4000;
       }
+    }
+  };
+
+  const switchingRef = useRef(false);
+  const handleSelect = async (server: Server) => {
+    setListOpen(false);
+    if (server.id === selectedRef.current?.id || switchingRef.current) return;
+    const state = tunnelStore.get();
+    if (state === 'connecting' || state === 'disconnecting') {
+      toastStore.show('Дождитесь завершения подключения или отключения');
+      return;
+    }
+    if (state === 'idle') {
+      selectedRef.current = server;
+      setSelected({ ...server });
+      return;
+    }
+    switchingRef.current = true;
+    tunnelStore.set('disconnecting');
+    try {
+      await WailsDisconnect();
+      tunnelStore.set('idle');
+      selectedRef.current = server;
+      setSelected({ ...server });
+      await doConnect(server);
+    } catch (e) {
+      tunnelStore.set('idle');
+      toastStore.show(`Не удалось переключить сервер: ${String(e)}`, 6000);
+    } finally {
+      switchingRef.current = false;
     }
   };
 
@@ -776,7 +806,7 @@ export default function Connect() {
           selected={selected}
           listOpen={listOpen}
           onToggleList={() => setListOpen(o => !o)}
-          onSelect={(s) => { setSelected({ ...s }); setListOpen(false); }}
+          onSelect={handleSelect}
           onIconClick={handleIconClick}
           onEdit={(s) => setEditServer(s)}
           onRemove={handleRemoveXray}

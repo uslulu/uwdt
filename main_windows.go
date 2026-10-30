@@ -35,9 +35,7 @@ var wintunDLL []byte
 var (
 	trayReady    atomic.Bool
 	trayStopping atomic.Bool
-	trayStop     = make(chan struct{})
 	trayExited   = make(chan struct{})
-	trayStopOnce sync.Once
 	trayExitOnce sync.Once
 )
 
@@ -60,7 +58,6 @@ func startTray(ctx context.Context) {
 		exit.Click(func() { wailsruntime.Quit(ctx) })
 
 		trayReady.Store(true)
-		go hideMinimisedWindow(ctx)
 	}, func() {
 		trayReady.Store(false)
 		trayExitOnce.Do(func() { close(trayExited) })
@@ -70,24 +67,8 @@ func startTray(ctx context.Context) {
 	})
 }
 
-func hideMinimisedWindow(ctx context.Context) {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-trayStop:
-			return
-		case <-ticker.C:
-			if trayReady.Load() && wailsruntime.WindowIsMinimised(ctx) {
-				wailsruntime.WindowHide(ctx)
-			}
-		}
-	}
-}
-
 func stopTray() {
 	trayStopping.Store(true)
-	trayStopOnce.Do(func() { close(trayStop) })
 	if trayReady.Load() {
 		systray.Quit()
 		select {
@@ -103,17 +84,21 @@ func main() {
 		backend.RunCaptchaWindowWindows(os.Args[2:])
 		return
 	}
+	if !prepareWindowsLaunch() {
+		return
+	}
 	backend.InitWintun(wintunDLL)
 	app := backend.NewApp()
 	secondInstanceLaunch := make(chan struct{}, 1)
 
 	err := wails.Run(&options.App{
-		Title:     "UWDT",
-		Width:     900,
-		Height:    600,
-		MinWidth:  800,
-		MinHeight: 550,
-		Frameless: false,
+		Title:             "UWDT",
+		Width:             900,
+		Height:            600,
+		MinWidth:          800,
+		MinHeight:         550,
+		Frameless:         false,
+		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
