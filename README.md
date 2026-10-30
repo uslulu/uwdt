@@ -178,3 +178,13 @@ wails build -platform darwin/universal
 Сторонние компоненты:
 - [Xray-core](https://github.com/XTLS/Xray-core) — MPL-2.0 (подключение по подпискам VLESS).
 - Шрифт флагов стран из [country-flag-emoji-polyfill](https://github.com/talkjs/country-flag-emoji-polyfill) (MIT); изображения флагов — [Twemoji](https://github.com/jdecked/twemoji), CC-BY 4.0.
+
+### Проверка интерфейса при ручной сборке
+
+Для ручной сборки Go используйте `scripts/build.sh` вместо прямого `go build`
+с теми же аргументами и переменными окружения. Скрипт проверяет отпечатки
+исходников frontend, зависимостей, среды Node и файлов `dist`. Проверенный
+интерфейс используется повторно; устаревший, изменённый или неизвестный —
+пересобирается через `npm ci` и `npm run build`. Wails также создаёт отпечаток
+при выполнении настроенной команды `npm run build`. Прямой `go build` эту
+проверку не выполняет.
