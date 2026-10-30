@@ -47,21 +47,17 @@
 
 ---
 
-## Запуск
+## Запуск на Linux
 
-### Linux
-
-**1. Установите зависимости:**
+Готовых сборок под Linux нет — соберите из исходников (см. ниже). Для запуска нужны `wireguard-tools`:
 
 ```bash
 # Ubuntu/Debian
-sudo apt install wireguard-tools libwebkit2gtk-4.1-dev
+sudo apt install wireguard-tools
 
 # Arch
-sudo pacman -S wireguard-tools webkit2gtk-4.1
+sudo pacman -S wireguard-tools
 ```
-
-**2. Настройте права для WireGuard:**
 
 Приложению нужны права root для управления сетевым интерфейсом. Установите sudoers-правило:
 
@@ -76,23 +72,6 @@ your_user ALL=(ALL) NOPASSWD: /usr/bin/ip, /usr/bin/wg
 ```
 
 Скрипт автоматически определит текущего пользователя и создаст файл `/etc/sudoers.d/pwdtt`.
-
-**3. Запустите:**
-
-```bash
-chmod +x pwdtt-linux-amd64
-./pwdtt-linux-amd64
-```
-
-### Windows
-
-Скачайте `pwdtt-windows-amd64.exe` из [Releases](https://github.com/luminescq/PWDTT/releases) и запустите. Драйвер WireGuard (wintun) встроен.
-
-### macOS
-
-Скачайте `PWDTT-macos.zip` из [Releases](https://github.com/luminescq/PWDTT/releases), распакуйте и запустите `PWDTT.app`. При первом запуске macOS запросит разрешение на создание сетевого интерфейса — введите пароль администратора.
-
-> Universal бинарник: работает на Intel и Apple Silicon (M1/M2/M3/M4).
 
 ---
 
@@ -121,36 +100,48 @@ wdtt://1.2.3.4:56000:56001:0:mypassword:AbCdEfGh,XyZ12345#Мой сервер
 
 Вставить ссылку можно через кнопку `+` или просто **Ctrl+V** в любом месте окна.
 
-> Также принимаються ссылки qwdtt.
+> Также принимаются ссылки qwdtt.
 
 ---
 
 ## Сборка из исходников
 
-**Зависимости:** Go 1.26+, Node.js 22+, [Wails v2](https://wails.io)
+**Зависимости:** Go 1.26+, Node.js 22+, [Wails v2](https://wails.io) (v2.14.0)
 
 ```bash
-# Linux
-sudo apt install libayatana-appindicator3-dev pkg-config gcc libwebkit2gtk-4.1-dev
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
 
-git clone https://github.com/luminescq/PWDTT
-cd PWDTT
-wails build -platform linux/amd64 -tags webkit2_41 -o pwdtt-linux-amd64
-# → build/bin/pwdtt-linux-amd64
-```
-
-```bash
-# Windows (кросс-компиляция с Linux)
-wails build -platform windows/amd64
-# → build/bin/pwdtt.exe
+git clone https://github.com/uslulu/uwdt
+cd uwdt
 ```
 
 ```bash
 # macOS (только на macOS)
-wails build -platform darwin/universal
-# → build/bin/pwdtt-macos
+wails build -platform darwin/arm64
+# → build/bin/PWDTT.app (имя бандла из wails.json; в релизах переименован в UWDT.app)
 ```
+
+```bash
+# Windows (кросс-компиляция с Linux/macOS)
+# Собираем обычным go build: у wails build конфликт .rsrc с нашим манифестом UAC.
+cd frontend && npm ci && npm run build && cd ..
+go install github.com/tc-hib/go-winres@latest
+go-winres make --in scripts/windows-resources.json --out rsrc --arch amd64 \
+  --product-version 1.9.1.0 --file-version 1.9.1.0
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui" -o build/bin.noindex/UWDT.exe .
+# → build/bin.noindex/UWDT.exe
+# Установщик: LC_ALL=en_US.UTF-8 makensis -INPUTCHARSET UTF8 -DVERSION=1.9.1 build/windows/installer/uwdt.nsi
+```
+
+```bash
+# Linux (на Linux)
+sudo apt install libayatana-appindicator3-dev pkg-config gcc libwebkit2gtk-4.1-dev
+wails build -platform linux/amd64 -tags webkit2_41 -o uwdt-linux-amd64
+# → build/bin/uwdt-linux-amd64
+```
+
+> Релизы собираются автоматически: пуш тега `v*` запускает GitHub Actions,
+> который собирает все платформы и публикует релиз (см. `.github/workflows/release.yml`).
 
 ---
 
@@ -160,7 +151,7 @@ wails build -platform darwin/universal
 
 1. Откройте **Настройки** (шестерёнка вверху)
 2. Нажмите **Отчёт** — информация о системе и логах сессии скопируется в буфер обмена
-3. Создайте [Issue](https://github.com/luminescq/PWDTT/issues/new) и вставьте отчёт
+3. Создайте [Issue](https://github.com/uslulu/uwdt/issues/new) и вставьте отчёт
 
 Отчёт содержит: версию ОС, версию Go, версию приложения, имя хоста и.filtered логи текущей сессии.
 

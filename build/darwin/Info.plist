@@ -4,7 +4,9 @@
         <key>CFBundlePackageType</key>
         <string>APPL</string>
         <key>CFBundleName</key>
-        <string>{{.Info.ProductName}}</string>
+        <!-- Не ProductName из wails.json: смена имени проекта меняет и bundle ID,
+             а вместе с ним теряется localStorage (серверы, настройки) у обновившихся. -->
+        <string>UWDT</string>
         <key>CFBundleExecutable</key>
         <string>{{.OutputFilename}}</string>
         <key>CFBundleIdentifier</key>
