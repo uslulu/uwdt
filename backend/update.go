@@ -25,10 +25,12 @@ type UpdateInfo struct {
 }
 
 type ghRelease struct {
-	TagName string `json:"tag_name"`
-	Body    string `json:"body"`
-	HTMLURL string `json:"html_url"`
-	Assets  []struct {
+	TagName    string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+	Body       string `json:"body"`
+	HTMLURL    string `json:"html_url"`
+	Assets     []struct {
 		BrowserDownloadURL string `json:"browser_download_url"`
 		Name               string `json:"name"`
 		Digest             string `json:"digest"` // "sha256:…"
@@ -46,43 +48,76 @@ func assetMarker() string {
 	return runtime.GOOS + "-" + runtime.GOARCH
 }
 
-// CheckUpdate проверяет наличие обновлений на GitHub (UpdateRepo).
-// Возвращает ошибку если сеть недоступна или API недоступен.
+// CheckUpdate ищет самый новый стабильный релиз с архивом для текущей платформы.
 func CheckUpdate(currentVersion string) (*UpdateInfo, error) {
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Get("https://api.github.com/repos/" + UpdateRepo + "/releases/latest")
-	if err != nil {
-		return nil, fmt.Errorf("network error: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("github api status: %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	var release ghRelease
-	if err := json.Unmarshal(body, &release); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
+	return checkUpdate(&http.Client{Timeout: 8 * time.Second}, "https://api.github.com/repos/"+UpdateRepo+"/releases", currentVersion, assetMarker())
+}
 
-	latest := strings.TrimPrefix(release.TagName, "v")
-	log.Printf("[UPDATE] Release: %s, Current: %s, isNewer: %v", latest, currentVersion, isNewer(latest, currentVersion))
-	if !isNewer(latest, currentVersion) {
-		return &UpdateInfo{Available: false}, nil
-	}
-
-	info := &UpdateInfo{Available: true, Version: latest, Body: release.Body, Page: release.HTMLURL}
-	marker := assetMarker()
-	for _, a := range release.Assets {
-		if strings.Contains(strings.ToLower(a.Name), marker) && strings.HasSuffix(strings.ToLower(a.Name), ".zip") {
-			info.URL = a.BrowserDownloadURL
-			info.SHA256 = strings.TrimPrefix(strings.ToLower(a.Digest), "sha256:")
+func checkUpdate(client *http.Client, releasesURL, currentVersion, marker string) (*UpdateInfo, error) {
+	var best *UpdateInfo
+	// GitHub возвращает релизы в порядке создания, а не обязательно номера версии.
+	// Просматриваем все страницы, чтобы не пропустить релиз для своей платформы.
+	for page := 1; ; page++ {
+		resp, err := client.Get(fmt.Sprintf("%s?per_page=100&page=%d", releasesURL, page))
+		if err != nil {
+			return nil, fmt.Errorf("network error: %w", err)
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("github api status: %d", resp.StatusCode)
+		}
+		var releases []ghRelease
+		if err := json.Unmarshal(body, &releases); err != nil {
+			return nil, fmt.Errorf("parse response: %w", err)
+		}
+		for _, release := range releases {
+			if release.Draft || release.Prerelease {
+				continue
+			}
+			version := strings.TrimPrefix(release.TagName, "v")
+			if !validReleaseVersion(version) || !isNewer(version, currentVersion) || (best != nil && !isNewer(version, best.Version)) {
+				continue
+			}
+			for _, a := range release.Assets {
+				name := strings.ToLower(a.Name)
+				if strings.Contains(name, marker) && strings.HasSuffix(name, ".zip") && a.BrowserDownloadURL != "" {
+					best = &UpdateInfo{Available: true, Version: version, Body: release.Body, Page: release.HTMLURL, URL: a.BrowserDownloadURL, SHA256: strings.TrimPrefix(strings.ToLower(a.Digest), "sha256:")}
+					break
+				}
+			}
+		}
+		if len(releases) < 100 {
 			break
 		}
 	}
-	return info, nil
+	if best == nil {
+		return &UpdateInfo{Available: false}, nil
+	}
+	log.Printf("[UPDATE] Available: %s, Current: %s", best.Version, currentVersion)
+	return best, nil
+}
+
+// Принимаем только обычные версии x.y.z; тестовые теги не становятся обновлением.
+func validReleaseVersion(v string) bool {
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, c := range part {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func isNewer(a, b string) bool {
