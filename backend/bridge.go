@@ -13,17 +13,18 @@ import (
 
 // Bridge — мост между App.go и ядром.
 type Bridge struct {
-	ctx     context.Context
-	store   *Store
-	onEvent func(name string, args ...any)
-	mu      sync.Mutex
-	core    *core.Core
-	running bool
-	logFile *LogFile // полный лог сессии
-	stage   stageTracker
-	health  sessionHealth
-	session uint64 // номер сессии; stale forwardEvents не должен трогать новую
-	xray    bool   // текущая сессия — сервер из подписки (Xray), без ядра VK TURN
+	ctx      context.Context
+	store    *Store
+	onEvent  func(name string, args ...any)
+	mu       sync.Mutex
+	core     *core.Core
+	running  bool
+	coreDone chan struct{}
+	logFile  *LogFile // полный лог сессии
+	stage    stageTracker
+	health   sessionHealth
+	session  uint64 // номер сессии; stale forwardEvents не должен трогать новую
+	xray     bool   // текущая сессия — сервер из подписки (Xray), без ядра VK TURN
 }
 
 func NewBridge(ctx context.Context, store *Store, onEvent func(string, ...any)) *Bridge {
@@ -87,6 +88,8 @@ func (b *Bridge) Connect(params ConnectParams) error {
 
 	b.mu.Lock()
 	b.core = c
+	done := make(chan struct{})
+	b.coreDone = done
 	b.logFile = b.store.OpenLogFile()
 	b.mu.Unlock()
 
@@ -105,7 +108,10 @@ func (b *Bridge) Connect(params ConnectParams) error {
 		return fmt.Errorf("core start: %w", err)
 	}
 
-	go b.forwardEvents(events, sessID)
+	go func() {
+		defer close(done)
+		b.forwardEvents(events, sessID)
+	}()
 	go b.watchdog(sessID)
 	return nil
 }
@@ -115,6 +121,7 @@ const teardownWait = 20 * time.Second
 func (b *Bridge) Disconnect() {
 	b.mu.Lock()
 	c := b.core
+	coreDone := b.coreDone
 	b.mu.Unlock()
 
 	b.mu.Lock()
@@ -139,6 +146,11 @@ func (b *Bridge) Disconnect() {
 
 	if c != nil {
 		c.Stop()
+		// Stop only cancels the core. Wait until its event loop has reset
+		// running and delivered the final state before allowing reconnect.
+		if coreDone != nil {
+			<-coreDone
+		}
 	}
 
 	// У сессии Xray нет ядра, которое сообщило бы об остановке, — завершаем сами
