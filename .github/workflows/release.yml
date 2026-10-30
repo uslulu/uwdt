@@ -1,79 +1,141 @@
 name: Release
 
+# По тегу v* собирает все платформы и публикует релиз.
+# Ручной запуск (workflow_dispatch) только проверяет сборку — релиз не создаётся.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  GO_VERSION: '1.26'
+  NODE_VERSION: '22'
+  WAILS_VERSION: 'v2.14.0'
+
 jobs:
+  windows:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Resolve version
+        id: ver
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          case "$V" in
+            ''|*[!0-9.]*) V="0.0.0-dev" ;; # ручной прогон без тега
+          esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      # Манифест и иконка: генерируем syso из scripts/windows-resources.json,
+      # версия — из тега. Wails build не используем: он добавляет свой .rsrc
+      # и линковка падает с «too many .rsrc sections».
+      - name: Embed Windows manifest and icon
+        run: |
+          go install github.com/tc-hib/go-winres@latest
+          "$(go env GOPATH)/bin/go-winres" make \
+            --in scripts/windows-resources.json \
+            --out rsrc --arch amd64 \
+            --product-version "${{ steps.ver.outputs.version }}.0" \
+            --file-version "${{ steps.ver.outputs.version }}.0"
+
+      - name: Build UWDT.exe
+        run: |
+          mkdir -p build/bin.noindex
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -ldflags "-H windowsgui" -o build/bin.noindex/UWDT.exe .
+
+      - name: Zip UWDT-windows-amd64.zip
+        run: |
+          cd build/bin.noindex
+          zip UWDT-windows-amd64.zip UWDT.exe
+
+      # Установщик NSIS: без UTF-8 локали makensis не читает кириллицу в uwdt.nsi
+      - name: Build NSIS installer
+        run: |
+          sudo apt-get update && sudo apt-get install -y nsis locales
+          sudo locale-gen en_US.UTF-8
+          LC_ALL=en_US.UTF-8 makensis -INPUTCHARSET UTF8 \
+            -DVERSION=${{ steps.ver.outputs.version }} \
+            build/windows/installer/uwdt.nsi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            build/bin.noindex/UWDT-windows-amd64.zip
+            build/bin.noindex/UWDT-setup-windows-amd64.exe
+          retention-days: 7
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+
+      - name: Build UWDT.app
+        run: "$(go env GOPATH)/bin/wails build -platform darwin/arm64"
+
+      # Бандл называется по wails.json (PWDTT.app) — переименовываем в UWDT.app
+      - name: Zip UWDT-macos-arm64.zip
+        run: |
+          cd build/bin
+          mv PWDTT.app UWDT.app
+          ditto -c -k --sequesterRsrc --keepParent UWDT.app UWDT-macos-arm64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/bin/UWDT-macos-arm64.zip
+          retention-days: 7
+
   release:
     runs-on: ubuntu-latest
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download Linux artifact
-        uses: dawidd6/action-download-artifact@v6
+      - uses: actions/download-artifact@v4
         with:
-          workflow: build.yml
-          name: pwdtt-linux-amd64
+          pattern: '*'
           path: dist
+          merge-multiple: true
 
-      - name: Download Windows artifact
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          workflow: build.yml
-          name: pwdtt-windows-amd64
-          path: dist
-
-      - name: Download macOS artifact
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          workflow: build.yml
-          name: pwdtt-macos
-          path: dist
-
-      - name: List dist contents
-        run: find dist/ -maxdepth 3 -ls
-
-      - name: Create Release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            dist/pwdtt-linux-amd64
-            dist/pwdtt-windows-amd64.exe
-            dist/PWDTT-macos.zip
-          body: |
-            ## PWDTT v1.6.0
-
-            **Транспорт и ядро:**
-            - TURN TCP транспорт (переключатель UDP/TCP в настройках)
-            - Автообновление TURN-кредов при 401: туннель больше не умирает через ~10 минут
-            - Фейл GetCreds больше не блокирует запуск следующих групп воркеров
-            - Пер-воркерский режим обфускации вместо общей записи (data race устранён)
-            - Устранена утечка горутин релея на error-путях сессии
-            - Восстановление логгера при неудачном старте ядра
-
-            **Bridge и WG:**
-            - Generation guard: быстрый Disconnect→Connect больше не ломает новую сессию
-            - stateMu: устранена гонка Apply/Teardown на состоянии WireGuard (Windows/macOS)
-            - Закрытие лог-файла при неудачном подключении
-            - Статический GUID wintun вынесен в windows-only wg_windows_init.go
-
-            **UI и профили:**
-            - Кириллица и Unicode в именах серверов
-            - Хеши сохраняются в бэкенд-профиль; ошибки сохранения не расходуют UI с диском
-            - Toast-уведомление при ошибке импорта wdtt://-ссылки
-
-            **Тесты:**
-            - Изоляция store-тестов на Windows/Linux (AppData/XDG_CONFIG_HOME) — тесты больше не пишут в реальный конфиг
-            - Остановка ядра в bridge-тестах, актуализированные ожидания настроек
-
-            **От сообщества (by @Regstar2):**
-            - Авторизация не-конфиговых DTLS-воркеров: фикс «Reader: EOF» на новых qWDTT-серверах (fix #27)
-            - Скролл длинного списка серверов + обрезка длинных имён
-
-            **Platforms:**
-            - Linux x86_64
-            - Windows x86_64
-            - macOS (Universal: Intel + Apple Silicon)
+            dist/UWDT-windows-amd64.zip
+            dist/UWDT-setup-windows-amd64.exe
+            dist/UWDT-macos-arm64.zip
