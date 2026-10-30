@@ -39,6 +39,7 @@ func (a *App) Startup(ctx context.Context) {
 	if settings.AutoStart {
 		a.SetAutoStart(true)
 	}
+	go cleanupLegacyWindowsAutostart()
 
 	go cleanupOldUpdate()
 	go a.watchUpdates()

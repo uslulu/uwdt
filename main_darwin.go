@@ -57,7 +57,7 @@ func main() {
 			},
 			About: &mac.AboutInfo{
 				Title:   "UWDT",
-				Message: "Сборка на основе PWDTT (luminescq) с исключениями из туннеля",
+				Message: "UWDT, создан на основе PWDTT (luminescq). Распространяется по лицензии GPL",
 			},
 		},
 	})

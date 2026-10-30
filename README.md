@@ -63,7 +63,7 @@ sudo pacman -S wireguard-tools
 
 ```bash
 # Одной командой (скачает и запустит):
-sudo bash <(curl -s https://raw.githubusercontent.com/luminescq/PWDTT/main/assets/install-sudoers.sh)
+sudo bash <(curl -s https://raw.githubusercontent.com/uslulu/uwdt/main/assets/install-sudoers.sh)
 ```
 
 Или вручную через `visudo` — добавьте в `/etc/sudoers`:
@@ -158,7 +158,7 @@ wails build -platform linux/amd64 -tags webkit2_41 -o uwdt-linux-amd64
 ---
 
 > [!IMPORTANT]
-> Приложение является техническим инструментом для защищённого туннелирования собственного трафика через ваш сервер. Автор не призывает использовать PWDTT для противоправных целей или нарушения правил сторонних сервисов.
+> UWDT является техническим инструментом для защищённого туннелирования собственного трафика через ваш сервер. Автор не призывает использовать UWDT для противоправных целей или нарушения правил сторонних сервисов. UWDT создан на основе PWDTT (luminescq) и распространяется по лицензии GPL-3.0.
 
 ---
 

@@ -81,28 +81,43 @@ func setAutoStartLinux(v bool) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
+const windowsTaskName = "UWDT_AutoStart"
+
+// legacyWindowsTaskName — задача автозапуска старого PWDTT; удаляется при старте,
+// чтобы у мигрировавших пользователей не осталось двух задач.
+const legacyWindowsTaskName = "PWDTT_AutoStart"
+
+func deleteWindowsTask(taskName string) error {
+	cmd := exec.Command("schtasks", "/delete", "/tn", taskName, "/f")
+	hideWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "не удается найти") && !strings.Contains(strings.ToLower(string(out)), "cannot find") {
+		return fmt.Errorf("schtasks delete: %w — %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// cleanupLegacyWindowsAutostart убирает задачу автозапуска, оставшуюся от PWDTT.
+func cleanupLegacyWindowsAutostart() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	deleteWindowsTask(legacyWindowsTaskName)
+}
+
 func setAutoStartWindows(v bool) error {
+	if !v {
+		return deleteWindowsTask(windowsTaskName)
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	
-	taskName := "PWDTT_AutoStart"
-	
-	if !v {
-		// Remove scheduled task
-		cmd := exec.Command("schtasks", "/delete", "/tn", taskName, "/f")
-		hideWindow(cmd)
-		out, err := cmd.CombinedOutput()
-		if err != nil && !strings.Contains(string(out), "не удается найти") && !strings.Contains(strings.ToLower(string(out)), "cannot find") {
-			return fmt.Errorf("schtasks delete: %w — %s", err, strings.TrimSpace(string(out)))
-		}
-		return nil
-	}
-	
+
 	// Create scheduled task to run on user logon with highest privileges (admin)
 	// This prevents the UAC prompt on every system startup.
-	cmd := exec.Command("schtasks", "/create", "/tn", taskName, "/tr", fmt.Sprintf("\"%s\"", exe), "/sc", "onlogon", "/rl", "HIGHEST", "/f")
+	cmd := exec.Command("schtasks", "/create", "/tn", windowsTaskName, "/tr", fmt.Sprintf("\"%s\"", exe), "/sc", "onlogon", "/rl", "HIGHEST", "/f")
 	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
