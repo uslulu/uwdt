@@ -42,7 +42,7 @@ jobs:
         run: |
           V="${GITHUB_REF_NAME#v}"
           case "$V" in
-            ''|*[!0-9.]*) V="0.0.0-dev" ;; # ручной прогон без тега
+            ''|*[!0-9.]*) V="0.0.0" ;; # ручной прогон без тега
           esac
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
