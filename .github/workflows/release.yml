@@ -48,7 +48,8 @@ jobs:
 
       # Манифест и иконка: генерируем syso из scripts/windows-resources.json,
       # версия — из тега. Wails build не используем: он добавляет свой .rsrc
-      # и линковка падает с «too many .rsrc sections».
+      # и линковка падает с «too many .rsrc sections». Тег production обязателен:
+      # без него Wails на старте показывает диалог про build tags.
       - name: Embed Windows manifest and icon
         run: |
           go install github.com/tc-hib/go-winres@latest
@@ -62,7 +63,7 @@ jobs:
         run: |
           mkdir -p build/bin.noindex
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-            go build -ldflags "-H windowsgui" -o build/bin.noindex/UWDT.exe .
+            go build -tags production -ldflags "-H windowsgui" -o build/bin.noindex/UWDT.exe .
 
       - name: Zip UWDT-windows-amd64.zip
         run: |

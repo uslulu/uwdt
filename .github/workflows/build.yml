@@ -43,6 +43,7 @@ jobs:
 
       # Windows собирается обычным go build с syso из scripts/windows-resources.json;
       # wails build добавляет второй .rsrc и линковка падает.
+      # Тег production обязателен: без него Wails показывает диалог про build tags.
       - name: Compile Windows (cross)
         run: |
           go install github.com/tc-hib/go-winres@latest
@@ -51,7 +52,7 @@ jobs:
             --out rsrc --arch amd64 \
             --product-version 0.0.0.0 --file-version 0.0.0.0
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-            go build -ldflags "-H windowsgui" -o /tmp/UWDT.exe .
+            go build -tags production -ldflags "-H windowsgui" -o /tmp/UWDT.exe .
           git checkout -- rsrc_windows_amd64.syso
 
   build-macos:
