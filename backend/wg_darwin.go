@@ -224,6 +224,11 @@ func startTunHelperDarwin(addr string, mtu int, directIPs, tunnels []string, log
 	}
 	excludes = append(excludes, vkExcludeCIDRs...)
 	for _, dns := range localDNSServers() {
+		// Адреса tunnelDNSDefault — не «прежний DNS», а наш же остаток от
+		// прошлой сессии: исключать их мимо туннеля нельзя (см. isTunnelDNS)
+		if isTunnelDNS(dns) {
+			continue
+		}
 		// DNS, который уже ходит через другой VPN (Cisco и т.п.), не трогаем:
 		// иначе запросы к нему уйдут мимо того VPN и начнут таймаутить
 		if iface := routeIfaceDarwin(dns); strings.HasPrefix(iface, "utun") {

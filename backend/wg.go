@@ -200,6 +200,19 @@ var vkExcludeCIDRs = []string{
 // запросы к ним идут через туннель и провайдер их не подменит.
 var tunnelDNSDefault = []string{"1.0.0.1", "8.8.4.4"}
 
+// isTunnelDNS — адрес из tunnelDNSDefault. Такие DNS должны ходить ТОЛЬКО через
+// туннель: если resolv.conf ещё держит их от прошлой сессии (краш без
+// восстановления), исключать их через физический шлюз нельзя — провайдерский
+// DPI перехватит запрос и вернёт SERVFAIL для заблокированных доменов.
+func isTunnelDNS(s string) bool {
+	for _, d := range tunnelDNSDefault {
+		if s == d {
+			return true
+		}
+	}
+	return false
+}
+
 // parseWGDNS — IPv4-адреса из строки DNS = … конфига (имена поиска пропускаем).
 func parseWGDNS(conf string) []string {
 	var out []string
