@@ -68,7 +68,9 @@ func (d *dnsOverride) set(servers []string) error {
 	}
 	var saved []string
 	for _, f := range strings.Fields(out) {
-		if net.ParseIP(f) != nil {
+		if net.ParseIP(f) != nil && !isTunnelDNS(f) {
+			// tunnelDNSDefault в сохранённых — это остаток нашей же прошлой
+			// подмены, восстанавливать его при отключении нельзя
 			saved = append(saved, f)
 		}
 	}
