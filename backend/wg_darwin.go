@@ -23,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -735,13 +736,23 @@ func RunWGHelperDarwin(args []string) {
 	send(wgHelperMsg{Name: name}, int(dev.File().Fd()))
 
 	stop := make(chan struct{})
-	go g.watch(stop)
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		g.watch(stop)
+	}()
 
 	// Команды приложения: "add CIDR" / "del CIDR" — правка исключений на лету,
 	// "dns A,B" — DNS туннеля для основной сети (режим подписки),
 	// "down" или обрыв соединения (краш приложения) → уборка
 	var dns dnsOverride
-	defer dns.restore()
+	var tunnelDNS []string
+	restoreDNS := func() {
+		if err := dns.restore(); err != nil {
+			log.Printf("[WG] Не удалось восстановить DNS: %v", err)
+		}
+	}
+	defer restoreDNS()
 	reader := bufio.NewReader(hconn)
 	for {
 		line, err := reader.ReadString('\n')
@@ -750,7 +761,8 @@ func RunWGHelperDarwin(args []string) {
 			break
 		}
 		if len(f) == 2 && f[0] == "dns" {
-			if derr := dns.set(splitCSV(f[1])); derr != nil {
+			tunnelDNS = splitCSV(f[1])
+			if derr := dns.set(tunnelDNS); derr != nil {
 				send(wgHelperMsg{Log: "DNS туннеля не поставлен: " + derr.Error()}, -1)
 			} else {
 				send(wgHelperMsg{Log: fmt.Sprintf("DNS через туннель: %s (служба %s)", f[1], dns.service)}, -1)
@@ -764,9 +776,15 @@ func RunWGHelperDarwin(args []string) {
 			op := "add"
 			if f[0] == "tunoff" {
 				op = "delete"
+				restoreDNS()
 			}
 			for _, cidr := range splitCSV(*tunnels) {
 				_ = runCmdDarwin("route", "-q", "-n", op, "-net", cidr, "-interface", name)
+			}
+			if f[0] == "tunon" && len(tunnelDNS) > 0 {
+				if err := dns.set(tunnelDNS); err != nil {
+					log.Printf("[WG] Не удалось вернуть DNS туннеля: %v", err)
+				}
 			}
 		}
 		if err != nil {
@@ -774,6 +792,7 @@ func RunWGHelperDarwin(args []string) {
 		}
 	}
 	close(stop)
+	<-watchDone
 	g.cleanup()
 	runtime.KeepAlive(dev)
 }

@@ -82,9 +82,9 @@ func (d *dnsOverride) set(servers []string) error {
 	return nil
 }
 
-func (d *dnsOverride) restore() {
+func (d *dnsOverride) restore() error {
 	if !d.active {
-		return
+		return nil
 	}
 	args := []string{"-setdnsservers", d.service}
 	if len(d.saved) == 0 {
@@ -92,9 +92,12 @@ func (d *dnsOverride) restore() {
 	} else {
 		args = append(args, d.saved...)
 	}
-	_ = runCmdDarwin("networksetup", args...)
+	if err := runCmdDarwin("networksetup", args...); err != nil {
+		return err
+	}
 	d.active = false
 	flushDNSCacheDarwin()
+	return nil
 }
 
 func flushDNSCacheDarwin() {
