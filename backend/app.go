@@ -6,7 +6,7 @@ import (
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-var Version = "1.9.2"
+var Version = "1.9.6"
 
 // App — главный объект приложения.
 // Wails привязывает его методы к frontend через Bind().

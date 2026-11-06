@@ -242,9 +242,11 @@ func TestIsRTPPacket_RejectsNonRTP(t *testing.T) {
 		t.Error("should reject non-RTP version")
 	}
 
-	// Random data
+	// Случайный payload может случайно иметь корректный RTP-заголовок.
+	// Здесь проверяем заведомо неподдерживаемую версию заголовка.
 	random := make([]byte, 100)
 	rand.Read(random)
+	random[0] &^= 0xc0
 	if core.ObfsIsRTPPacket(random) {
 		t.Error("should reject random data")
 	}
