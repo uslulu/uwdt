@@ -519,7 +519,10 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 		tunnelRoutes = append(tunnelRoutes, cidr)
 	}
 	w.activeRoutes = tunnelRoutes
-	setTunnelDNSWindows(tunDev, parseWGDNS(conf), logf)
+	if err := setTunnelDNSWindows(tunDev, parseWGDNS(conf), logf); err != nil {
+		w.teardownWindowsLocked()
+		return fmt.Errorf("настройка DNS: %w", err)
+	}
 
 	logf(fmt.Sprintf("Туннель %s поднят, AllowedIPs: %v", wgIface, tunnelRoutes))
 	go w.RefreshExcludes(logf) // свежие домены, AS и «Россия» — пачкой через API, после подъёма туннеля

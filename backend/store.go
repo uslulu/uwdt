@@ -260,8 +260,21 @@ func configDir() string {
 
 // atomicWrite записывает файл атомарно: tmp → rename.
 func atomicWrite(path string, data []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), ".uwdt-write-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -270,7 +283,10 @@ func atomicWrite(path string, data []byte) error {
 // NewTestStore создаёт Store с временной директорией (для тестов).
 // Подменяет HOME и, на Windows, AppData — os.UserConfigDir() читает именно их,
 // иначе тесты пишут в реальный конфиг пользователя.
-func NewTestStore(t interface{ TempDir() string; Setenv(string, string) }) *Store {
+func NewTestStore(t interface {
+	TempDir() string
+	Setenv(string, string)
+}) *Store {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("AppData", filepath.Join(dir, "AppData", "Roaming"))

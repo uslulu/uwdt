@@ -38,8 +38,8 @@ type Event struct {
 	Message string
 
 	// event
-	Name   string   // "wg_config", "captcha_required", "ready"
-	Data   string   // JSON строка
+	Name    string   // "wg_config", "captcha_required", "ready"
+	Data    string   // JSON строка
 	TurnIPs []string // IP-адреса TURN-серверов (для exclude routes)
 
 	// stats
@@ -80,10 +80,10 @@ type Core struct {
 	captchaMode       atomic.Value
 	vkAuthMode        atomic.Value
 	events            chan Event
-	allocateGate *allocationGate
-	startOnce    sync.Once // guard от двойного Start()
-	startErr     atomic.Value // *startFailure — ошибка первого Start(), если он провалился
-	once         sync.Once // guard от двойного Stop()
+	allocateGate      *allocationGate
+	startOnce         sync.Once    // guard от двойного Start()
+	startErr          atomic.Value // *startFailure — ошибка первого Start(), если он провалился
+	once              sync.Once    // guard от двойного Stop()
 }
 
 // startFailure — обёртка для atomic.Value (чтобы разные error-типы не паниковали).
@@ -92,8 +92,8 @@ type startFailure struct{ err error }
 // activeCore — текущий запущенный экземпляр ядра.
 // Нужен для доступа из session.go, vk_auth.go и др. файлов.
 var (
-	activeCore     *Core
-	activeCoreMu   sync.RWMutex
+	activeCore   *Core
+	activeCoreMu sync.RWMutex
 )
 
 func setActiveCore(c *Core) {
@@ -168,8 +168,6 @@ func (c *Core) start() error {
 			log.SetOutput(os.Stderr)
 		}
 	}()
-
-	setupGlobalResolver()
 
 	// Все log.Printf → в канал событий (с фильтрацией)
 	// Без таймстемпа — UI добавляет своё время

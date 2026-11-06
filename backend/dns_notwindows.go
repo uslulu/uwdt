@@ -4,6 +4,6 @@ package backend
 
 import "golang.zx2c4.com/wireguard/tun"
 
-func setTunnelDNSWindows(tun.Device, []string, wgLogFunc) {}
+func setTunnelDNSWindows(tun.Device, []string, wgLogFunc) error { return nil }
 
 func clearTunnelDNSWindows() {}

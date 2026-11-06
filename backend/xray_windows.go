@@ -64,7 +64,12 @@ func (w *WG) applyXrayWindows(link string, serverIPs []string, logf wgLogFunc) e
 		removeExcludes()
 		return fmt.Errorf("адаптер Xray: %w", err)
 	}
-	setTunnelDNSLUID(luid, tunnelDNSDefault, logf)
+	if err := setTunnelDNSLUID(luid, tunnelDNSDefault, logf); err != nil {
+		clearTunnelDNSWindows()
+		_ = x.Close()
+		removeExcludes()
+		return fmt.Errorf("настройка DNS: %w", err)
+	}
 
 	w.activeXray = x
 	w.xrayMode = true
