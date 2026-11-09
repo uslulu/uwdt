@@ -167,8 +167,14 @@ func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) er
 // Настройки сохраняет и восстанавливает root-helper, в том числе при обрыве связи.
 func configureTunnelDNSDarwin(h *tunHelper, logf wgLogFunc) {
 	if dnsByOtherVPN(h.name, logf) {
-		logf("DNS обслуживает другой VPN — оставляю его")
-	} else if _, err := h.conn.Write([]byte("dns " + strings.Join(tunnelDNSDefault, ",") + "\n")); err != nil {
+		out, err := cmdOutputDarwin("scutil", "--dns")
+		if err != nil || !vpnDNSHasSupplementalZones(out, localDNSServers()) {
+			logf("DNS другого VPN сохранён: отдельные корпоративные зоны не подтверждены")
+			return
+		}
+		logf("Корпоративные supplemental DNS-зоны сохранены, внешний DNS направляю через UWDT")
+	}
+	if _, err := h.conn.Write([]byte("dns " + strings.Join(tunnelDNSDefault, ",") + "\n")); err != nil {
 		logf("DNS туннеля: " + err.Error())
 	} else {
 		logHelperReply(h.conn, logf)

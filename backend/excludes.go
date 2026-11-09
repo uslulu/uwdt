@@ -194,13 +194,13 @@ func logOnce(logf wgLogFunc, key, msg string) {
 }
 
 func lookupIPv4(ctx context.Context, r *net.Resolver, host string) []string {
-	addrs, err := r.LookupIPAddr(ctx, host)
+	addrs, err := r.LookupIP(ctx, "ip4", host)
 	if err != nil {
 		return nil
 	}
 	var out []string
 	for _, a := range addrs {
-		if ip4 := a.IP.To4(); ip4 != nil {
+		if ip4 := a.To4(); ip4 != nil {
 			out = append(out, ip4.String())
 		}
 	}
@@ -215,17 +215,18 @@ func lookupDomain(host string) []string {
 	if len(ips) > 0 {
 		return ips
 	}
-	for _, ns := range fallbackDNS {
-		ns := ns
-		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 2 * time.Second}
-			return d.DialContext(ctx, "udp", ns)
-		}}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		ips = lookupIPv4(ctx, r, host)
-		cancel()
-		if len(ips) > 0 {
-			return ips
+	for _, network := range []string{"udp", "tcp"} {
+		for _, ns := range fallbackDNS {
+			r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 2 * time.Second}
+				return d.DialContext(ctx, network, ns)
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ips = lookupIPv4(ctx, r, host)
+			cancel()
+			if len(ips) > 0 {
+				return ips
+			}
 		}
 	}
 	return nil

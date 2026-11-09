@@ -26,3 +26,32 @@ func TestParseServiceForDevice(t *testing.T) {
 		t.Error("для неизвестного устройства нужна ошибка")
 	}
 }
+
+func TestVPNDNSSupplementalPolicy(t *testing.T) {
+	policy := `DNS configuration
+resolver #1
+search domain[0] : corp.example
+nameserver[0] : 10.0.0.2
+flags : Request A records
+resolver #2
+domain : corp.example
+nameserver[0] : 10.0.0.2
+flags : Supplemental, Request A records
+DNS configuration (for scoped queries)
+resolver #1
+nameserver[0] : 10.0.0.3
+flags : Scoped, Request A records
+`
+	if !vpnDNSHasSupplementalZones(policy, []string{"10.0.0.2"}) {
+		t.Fatal("specific VPN zone should permit default override")
+	}
+	if vpnDNSHasSupplementalZones(policy, []string{"10.0.0.2", "10.0.0.3"}) {
+		t.Fatal("scoped resolver must not count as suffix coverage")
+	}
+	if vpnDNSHasSupplementalZones("resolver #1\nsearch domain[0] : corp.example\nnameserver[0] : 10.0.0.2\nflags : Request A records", []string{"10.0.0.2"}) {
+		t.Fatal("search domains alone are insufficient")
+	}
+	if vpnDNSHasSupplementalZones("resolver #1\ndomain : .\nnameserver[0] : 10.0.0.2\nflags : Supplemental", []string{"10.0.0.2"}) {
+		t.Fatal("catch-all VPN resolver must remain protected")
+	}
+}

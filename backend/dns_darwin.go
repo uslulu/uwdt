@@ -118,3 +118,48 @@ func defaultIfaceDarwin() string {
 	}
 	return ""
 }
+
+// vpnDNSHasSupplementalZones checks the unscoped resolver policy advertised by
+// the other VPN. Specific suffix resolvers remain authoritative after changing
+// the physical service's default DNS. Never infer suffixes from search domains.
+func vpnDNSHasSupplementalZones(output string, servers []string) bool {
+	output = strings.Split(output, "DNS configuration (for scoped queries)")[0]
+	covered := make(map[string]bool)
+	for _, block := range strings.Split(output, "resolver #") {
+		domain := ""
+		supplemental := false
+		var nameservers []string
+		for _, line := range strings.Split(block, "\n") {
+			key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+			if !ok {
+				continue
+			}
+			key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+			switch {
+			case key == "domain":
+				domain = strings.TrimSuffix(value, ".")
+			case key == "flags":
+				supplemental = strings.Contains(value, "Supplemental")
+			case strings.HasPrefix(key, "nameserver["):
+				if ip := net.ParseIP(value); ip != nil {
+					nameservers = append(nameservers, ip.String())
+				}
+			}
+		}
+		if domain != "" && supplemental {
+			for _, server := range nameservers {
+				covered[server] = true
+			}
+		}
+	}
+	if len(servers) == 0 {
+		return false
+	}
+	for _, server := range servers {
+		ip := net.ParseIP(server)
+		if ip == nil || !covered[ip.String()] {
+			return false
+		}
+	}
+	return true
+}
