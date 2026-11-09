@@ -90,24 +90,14 @@ const STATUS_TITLE: Record<TunnelState, string> = {
 
 // Волны вокруг пузыря: частые — пока подключаемся, редкие и спокойные — когда подключено
 function Ripples({ state }: { state: TunnelState }) {
-  const active = state === 'connecting' || state === 'connected';
+  if (state !== 'connecting' && state !== 'connected') return null;
   const fast = state === 'connecting';
   return (
-    <AnimatePresence>
-      {active && (
-        <motion.span key={fast ? 'fast' : 'slow'} className="ripples" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }}>
-          {[0, 1, 2].slice(0, fast ? 3 : 2).map(i => (
-            <motion.span
-              key={i}
-              className="ripple"
-              initial={{ scale: 1, opacity: 0 }}
-              animate={{ scale: fast ? 1.55 : 1.4, opacity: [0, fast ? 0.45 : 0.28, 0] }}
-              transition={{ duration: fast ? 1.8 : 4, repeat: Infinity, delay: i * (fast ? 0.6 : 2), ease: 'easeOut' }}
-            />
-          ))}
-        </motion.span>
-      )}
-    </AnimatePresence>
+    <span className={`ripples${fast ? ' ripples--fast' : ''}`}>
+      {(fast ? [0, 1, 2] : [0, 1]).map(i => (
+        <span key={i} className="ripple" style={{ animationDelay: `${i * (fast ? 0.6 : 2)}s` }} />
+      ))}
+    </span>
   );
 }
 
@@ -117,7 +107,7 @@ function PowerButton({ tunnelState, linkFlash, selected, onTunnel }: {
   return (
     <button
       type="button"
-      className={`power-btn${linkFlash ? ' power-btn--flash' : ''}${selected?.kind === 'xray' ? ' power-btn--sub' : ''}`}
+      className={`power-btn${tunnelState === 'connected' ? ' power-btn--connected' : ''}${linkFlash ? ' power-btn--flash' : ''}${selected?.kind === 'xray' ? ' power-btn--sub' : ''}`}
       onClick={onTunnel}
       disabled={!selected}
       title={selected ? TUNNEL_LABEL[tunnelState] : 'Добавьте сервер'}

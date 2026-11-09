@@ -196,3 +196,5 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+.ui-paused .bubble-wave, .ui-paused .bubble-level, .ui-paused .ripple { animation-play-state: paused; }

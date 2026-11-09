@@ -34,6 +34,22 @@ function useWdttPaste() {
   }, []);
 }
 
+function useAnimationVisibility() {
+  useEffect(() => {
+    const update = () => document.documentElement.classList.toggle('ui-paused', document.hidden || !document.hasFocus());
+    update();
+    document.addEventListener('visibilitychange', update);
+    window.addEventListener('focus', update);
+    window.addEventListener('blur', update);
+    return () => {
+      document.removeEventListener('visibilitychange', update);
+      window.removeEventListener('focus', update);
+      window.removeEventListener('blur', update);
+      document.documentElement.classList.remove('ui-paused');
+    };
+  }, []);
+}
+
 function useWailsEvents() {
   useEffect(() => {
     const offs = [
@@ -92,6 +108,7 @@ function useUpdateChecker() {
 
 export default function App() {
   useWailsEvents();
+  useAnimationVisibility();
   useWdttPaste();
   const { updateInfo, closeUpdate } = useUpdateChecker();
 

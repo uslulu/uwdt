@@ -15,7 +15,7 @@
 .bubble--connected .bubble-icon, .bubble--disconnecting .bubble-icon { color: #ffffff; }
 .bubble-shine { opacity: 0.75; }
 
-.bubble--connected { filter: drop-shadow(0 10px 32px var(--glow)); }
+
 
 @keyframes bubble-wave {
   from { transform: translateX(0); }
