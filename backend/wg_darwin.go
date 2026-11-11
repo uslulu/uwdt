@@ -23,7 +23,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -273,9 +272,9 @@ func startTunHelperDarwin(addr string, mtu int, directIPs, tunnels []string, log
 		return nil, err
 	}
 
-	shellCmd := fmt.Sprintf("%s --wg-helper -sock %s -addr %s -mtu %d -exclude %s -exclude-file %s -tunnel %s >/dev/null 2>&1 &",
+	shellCmd := fmt.Sprintf("%s --wg-helper -sock %s -addr %s -mtu %d -exclude %s -exclude-file %s -tunnel %s -diagnostic-ips %s >/dev/null 2>&1 &",
 		shellQuote(exe), shellQuote(sock), shellQuote(addr), mtu,
-		shellQuote(strings.Join(excludes, ",")), shellQuote(exclFile), shellQuote(strings.Join(tunnels, ",")))
+		shellQuote(strings.Join(excludes, ",")), shellQuote(exclFile), shellQuote(strings.Join(tunnels, ",")), shellQuote(strings.Join(directIPs, ",")))
 	osa := fmt.Sprintf("do shell script %q with administrator privileges", shellCmd)
 
 	logf("Запрос прав администратора для настройки туннеля…")
@@ -416,6 +415,15 @@ func (w *WG) setTunnelRoutesDarwin(on bool) error {
 	}
 	_, err := w.helperConn.Write([]byte(cmd))
 	return err
+}
+
+// logRoutesDarwin просит helper сохранить маршруты текущей сессии.
+func (w *WG) logRoutesDarwin() {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if w.helperConn != nil {
+		_, _ = w.helperConn.Write([]byte("diag\n"))
+	}
 }
 
 // routeGetDarwin — что macOS выберет для адреса: назначение, маска, шлюз, интерфейс.
@@ -635,6 +643,7 @@ func RunWGHelperDarwin(args []string) {
 	excludes := fs.String("exclude", "", "exclude CIDR через запятую (мимо туннеля)")
 	tunnels := fs.String("tunnel", "", "туннельные CIDR через запятую")
 	exclFile := fs.String("exclude-file", "", "файл с исключениями пользователя (CIDR построчно)")
+	diagnosticIPs := fs.String("diagnostic-ips", "", "IP серверов для диагностики маршрутов")
 	fs.Parse(args)
 
 	raddr, err := net.ResolveUnixAddr("unix", *sockPath)
@@ -688,6 +697,28 @@ func RunWGHelperDarwin(args []string) {
 	gw := physicalGatewayDarwin()
 	send(wgHelperMsg{Log: fmt.Sprintf("Default gateway: %s", gw)}, -1)
 
+	snapshotRoutes := func(stage string) {
+		_, _, defaultGW, defaultIf := routeGetDarwin("default")
+		send(wgHelperMsg{Log: fmt.Sprintf("[МАРШРУТЫ] %s: default gateway=%q interface=%q, DNS=%v", stage, defaultGW, defaultIf, localDNSServers())}, -1)
+		for _, ip := range splitCSV(*diagnosticIPs) {
+			if net.ParseIP(ip) == nil {
+				continue
+			}
+			dst, mask, gateway, iface := routeGetDarwin(ip)
+			if iface == "" {
+				send(wgHelperMsg{Log: fmt.Sprintf("[МАРШРУТЫ] %s: %s — не удалось определить маршрут", stage, ip)}, -1)
+				continue
+			}
+			var sourceIP string
+			if strings.HasPrefix(iface, "en") {
+				out, _ := cmdOutputDarwin("ipconfig", "getifaddr", iface)
+				sourceIP = strings.TrimSpace(out)
+			}
+			send(wgHelperMsg{Log: fmt.Sprintf("[МАРШРУТЫ] %s: %s destination=%q mask=%q gateway=%q interface=%q interface_ip=%q", stage, ip, dst, mask, gateway, iface, sourceIP)}, -1)
+		}
+	}
+	snapshotRoutes("до установки маршрутов")
+
 	// Exclude-маршруты через физический gateway — ДО туннельных,
 	// чтобы трафик к turn/VK не успел уйти в туннель
 	var added []string
@@ -738,6 +769,8 @@ func RunWGHelperDarwin(args []string) {
 		}
 	}
 
+	snapshotRoutes("после установки маршрутов")
+
 	// Передаём fd интерфейса приложению
 	send(wgHelperMsg{Name: name}, int(dev.File().Fd()))
 
@@ -755,7 +788,7 @@ func RunWGHelperDarwin(args []string) {
 	var tunnelDNS []string
 	restoreDNS := func() {
 		if err := dns.restore(); err != nil {
-			log.Printf("[WG] Не удалось восстановить DNS: %v", err)
+			send(wgHelperMsg{Log: fmt.Sprintf("Не удалось восстановить DNS: %v", err)}, -1)
 		}
 	}
 	defer restoreDNS()
@@ -777,19 +810,25 @@ func RunWGHelperDarwin(args []string) {
 		if len(f) == 2 && (f[0] == "add" || f[0] == "del") {
 			g.apply(f[0], f[1])
 		}
+		if len(f) == 1 && f[0] == "diag" {
+			snapshotRoutes("ошибка подключения к серверу")
+		}
 		// Туннель без связи: снять/вернуть его маршруты, чтобы интернет шёл напрямую
 		if len(f) == 1 && (f[0] == "tunoff" || f[0] == "tunon") {
 			op := "add"
 			if f[0] == "tunoff" {
 				op = "delete"
+				snapshotRoutes("перед снятием маршрутов")
 				restoreDNS()
 			}
 			for _, cidr := range splitCSV(*tunnels) {
-				_ = runCmdDarwin("route", "-q", "-n", op, "-net", cidr, "-interface", name)
+				if rerr := runCmdDarwin("route", "-q", "-n", op, "-net", cidr, "-interface", name); rerr != nil {
+					send(wgHelperMsg{Log: fmt.Sprintf("Маршрут %s, интерфейс %s, операция %s: %v", cidr, name, op, rerr)}, -1)
+				}
 			}
 			if f[0] == "tunon" && len(tunnelDNS) > 0 {
 				if err := dns.set(tunnelDNS); err != nil {
-					log.Printf("[WG] Не удалось вернуть DNS туннеля: %v", err)
+					send(wgHelperMsg{Log: fmt.Sprintf("Не удалось вернуть DNS туннеля: %v", err)}, -1)
 				}
 			}
 		}

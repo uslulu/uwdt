@@ -207,7 +207,7 @@ func (s *Store) OpenLogFile() *LogFile {
 }
 
 // Write пишет строку в файл лога.
-// Sync каждые 50 строк чтобы не душить I/O.
+// Снимки маршрутов сохраняем сразу, обычные сообщения — каждые 50 строк.
 func (lf *LogFile) Write(level, msg string) {
 	if lf == nil || lf.file == nil {
 		return
@@ -215,7 +215,7 @@ func (lf *LogFile) Write(level, msg string) {
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(lf.file, "[%s] [%s] %s\n", ts, level, msg)
 	lf.pending++
-	if lf.pending >= 50 {
+	if lf.pending >= 50 || strings.Contains(msg, "[МАРШРУТЫ]") {
 		lf.file.Sync()
 		lf.pending = 0
 	}
