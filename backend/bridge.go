@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -305,6 +306,7 @@ func (b *Bridge) SendCaptchaResult(token string) {
 // его завершения уже начата новая сессия (быстрый Disconnect → Connect),
 // устаревший горутин не имеет права трогать состояние Bridge.
 func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
+	var routeSnapshotAt time.Time
 	for ev := range events {
 		b.mu.Lock()
 		stale := b.session != sessID
@@ -318,6 +320,11 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 			b.onEvent("state_changed", ev.Status)
 
 		case core.EventLog:
+			if time.Since(routeSnapshotAt) >= time.Minute &&
+				(strings.Contains(ev.Message, "network is unreachable") || strings.Contains(ev.Message, "can't assign requested address")) {
+				wg.logRoutesDarwin()
+				routeSnapshotAt = time.Now()
+			}
 			// Пишем ВСЁ в файл (включая отфильтрованное для UI)
 			b.mu.Lock()
 			if b.logFile != nil {

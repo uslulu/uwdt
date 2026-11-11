@@ -32,3 +32,21 @@ export const degradedStore = {
     return () => { degradedListeners.delete(fn); };
   },
 };
+
+// Текущий этап подключения — строка под пузырём, пока туннель поднимается.
+type HealthListener = (s: string) => void;
+
+let healthCurrent = '';
+const healthHealthListeners = new Set<HealthListener>();
+
+export const healthStore = {
+  set: (s: string) => {
+    healthCurrent = s;
+    healthHealthListeners.forEach(fn => fn(healthCurrent));
+  },
+  subscribe: (fn: HealthListener) => {
+    healthHealthListeners.add(fn);
+    fn(healthCurrent);
+    return () => { healthHealthListeners.delete(fn); };
+  },
+};

@@ -22,7 +22,7 @@ import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles, C
 import type { backend } from '../../wailsjs/go/models';
 import Bubble from '../components/Bubble';
 import { statsStore, formatRate, formatDuration, sessionClock, type TunnelStats } from '../lib/stores/statsStore';
-import { stageStore, degradedStore } from '../lib/stores/stageStore';
+import { stageStore, degradedStore, healthStore } from '../lib/stores/stageStore';
 import { IconArrowDown, IconArrowUp, IconPlugConnected, IconClock } from '@tabler/icons-react';
 import './Connect.css';
 
@@ -412,6 +412,8 @@ export default function Connect() {
   useEffect(() => statsStore.subscribe(setStats), []);
   const [stage, setStage] = useState('');
   useEffect(() => stageStore.subscribe(setStage), []);
+  const [health, setHealth] = useState('');
+  useEffect(() => healthStore.subscribe(setHealth), []);
   const [degraded, setDegraded] = useState(false);
   useEffect(() => degradedStore.subscribe(setDegraded), []);
   const shownState: TunnelState = tunnelState === 'connected' && degraded ? 'connecting' : tunnelState;
@@ -782,6 +784,7 @@ export default function Connect() {
           <div className="hero-sub">
             {!selected ? 'Добавьте сервер кнопкой «+»'
               : tunnelState === 'idle' ? 'Нажмите на пузырь, чтобы подключиться'
+              : health && tunnelState === 'connected' ? <span className="hero-stage">{health}</span>
               : degraded && tunnelState === 'connected' && selected.kind !== 'xray' ? <span className="hero-stage">Нет связи с серверами ВК — интернет пока напрямую</span>
               : tunnelState === 'connecting' && stage ? <span key={stage} className="hero-stage">{stage}</span>
               : selected.name}
