@@ -10,7 +10,7 @@ func TestDisconnectWaitsForCoreCompletion(t *testing.T) {
 	coreDone := make(chan struct{})
 	entered := make(chan struct{})
 	returned := make(chan struct{})
-	b := &Bridge{core: core.New(core.Config{}), coreDone: coreDone, running: true, onEvent: func(name string, args ...any) {
+	b := &Bridge{core: core.New(core.Config{}), sessionWorkDone: coreDone, running: true, onEvent: func(name string, args ...any) {
 		if name == "degraded" {
 			close(entered)
 		}

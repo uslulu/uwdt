@@ -1,0 +1,184 @@
+/* Общие примитивы интерфейса: модалки, кнопки, поля, переключатели.
+   Значения — только из токенов index.css. */
+
+/* Модальное окно */
+.ui-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: overlay-in 0.3s var(--ease);
+}
+
+.ui-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  width: 400px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  animation: modal-in 0.4s var(--ease);
+}
+
+.ui-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  color: var(--text);
+}
+
+.ui-modal-title {
+  flex: 1;
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: var(--text);
+}
+
+/* Кнопки */
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: none;
+  font-family: 'Geist', sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease), color 0.2s var(--ease), opacity 0.2s var(--ease), transform 0.2s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.ui-btn:active:not(:disabled) { transform: scale(0.98); }
+.ui-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.ui-btn--primary { background: var(--accent); color: var(--accent-fg); }
+.ui-btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+.ui-btn--secondary { border-color: var(--border); color: var(--text-2); background: var(--surface); }
+.ui-btn--secondary:hover:not(:disabled) { border-color: var(--text-3); color: var(--text); background: var(--surface-2); }
+
+.ui-btn--danger { background: var(--err); color: #ffffff; }
+.ui-btn--danger:hover:not(:disabled) { opacity: 0.88; }
+
+.ui-btn--block { width: 100%; padding: 12px; }
+
+/* Иконочная кнопка */
+.ui-icon-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.2s var(--ease), color 0.2s var(--ease), transform 0.2s var(--ease);
+}
+.ui-icon-btn:hover:not(:disabled) { background: var(--bg-2); color: var(--text); }
+.ui-icon-btn:active:not(:disabled) { transform: scale(0.92); }
+.ui-icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ui-icon-btn--danger:hover:not(:disabled) { color: var(--err); background: var(--err-dim); }
+
+/* Поле ввода */
+.ui-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--r-sm);
+  background: var(--input-bg);
+  color: var(--text);
+  font-family: 'Geist', sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.ui-input::placeholder { color: var(--text-4); }
+.ui-input:hover { border-color: var(--text-4); }
+.ui-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.ui-input--error, .ui-input--error:focus { border-color: var(--err); box-shadow: 0 0 0 3px var(--err-dim); }
+
+/* Переключатель */
+.ui-toggle {
+  flex-shrink: 0;
+  width: 44px;
+  height: 26px;
+  border: none;
+  border-radius: 999px;
+  background: var(--bg-3);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.3s var(--ease);
+}
+.ui-toggle::after {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  top: 3px;
+  left: 3px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.3s var(--ease);
+}
+.ui-toggle--on { background: var(--accent); }
+.ui-toggle--on::after { transform: translateX(18px); }
+.ui-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Сегментированный контрол */
+.ui-seg {
+  display: flex;
+  gap: 2px;
+  background: var(--seg-bg);
+  border-radius: var(--r-sm);
+  padding: 2px;
+}
+.ui-seg-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-family: 'Geist', sans-serif;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s var(--ease), color 0.2s var(--ease);
+}
+.ui-seg-btn:hover:not(.ui-seg-btn--active) { color: var(--text); }
+.ui-seg-btn--active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+
+/* Строка настройки */
+.ui-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-2);
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text);
+}
+.ui-row:last-of-type { border-bottom: none; }
