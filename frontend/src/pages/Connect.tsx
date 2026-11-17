@@ -509,7 +509,7 @@ export default function Connect() {
         const msg = e instanceof Error ? e.message : String(e);
         logStore.push('ERROR', msg);
         toastStore.show(msg, 6000);
-        tunnelStore.set('idle');
+        if (tunnelStore.get() !== 'disconnecting') tunnelStore.set('idle');
       } finally {
         connectingRef.current = false;
       }
@@ -539,25 +539,19 @@ export default function Connect() {
       const msg = e instanceof Error ? e.message : String(e);
       logStore.push('ERROR', msg);
       toastStore.show(msg, 6000);
-      tunnelStore.set('idle');
+      if (tunnelStore.get() !== 'disconnecting') tunnelStore.set('idle');
     } finally {
       connectingRef.current = false;
     }
   };
 
-  const reconnectAtRef = useRef(0);
-
   const handleTunnel = async () => {
     if (!selectedRef.current) return;
-    if (tunnelState === 'idle') {
-      if (Date.now() < reconnectAtRef.current) {
-        const secs = Math.ceil((reconnectAtRef.current - Date.now()) / 1000);
-        toastStore.show(`Подождите ${secs} сек.`, 2000);
-        return;
-      }
+    const state = tunnelStore.get();
+    if (state === 'idle') {
       toastStore.show('Убедитесь что другие VPN отключены', 4000);
       await doConnect();
-    } else if (tunnelState === 'connected' || tunnelState === 'connecting') {
+    } else if (state === 'connected' || state === 'connecting') {
       tunnelStore.set('disconnecting');
       try {
         await WailsDisconnect();
@@ -565,7 +559,6 @@ export default function Connect() {
         // игнорируем ошибку disconnect
       } finally {
         tunnelStore.set('idle');
-        reconnectAtRef.current = Date.now() + 4000;
       }
     }
   };
@@ -769,16 +762,20 @@ export default function Connect() {
             selected={selected}
             onTunnel={handleTunnel}
           />
+          <div className={`status-chip${tunnelState === 'connected' ? ' status-chip--connected' : ''}${shownState === 'connecting' || shownState === 'disconnecting' ? ` status-chip--${shownState}` : ''}`}>
+            <span className={`status-dot status-dot--${shownState}`} />
+            {!selected ? 'Нет серверов' : degraded && tunnelState === 'connected' ? 'Восстановление связи' : STATUS_TITLE[shownState]}
+          </div>
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
-              key={!selected ? 'none' : degraded && tunnelState === 'connected' ? 'degraded' : tunnelState}
+              key={selected?.id ?? 'none'}
               className="hero-title"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.18 }}
             >
-              {!selected ? 'Нет серверов' : degraded && tunnelState === 'connected' ? 'Восстанавливаю связь…' : STATUS_TITLE[tunnelState]}
+              {selected ? selected.name : 'UWDT'}
             </motion.div>
           </AnimatePresence>
           <div className="hero-sub">
@@ -787,7 +784,7 @@ export default function Connect() {
               : health && tunnelState === 'connected' ? <span className="hero-stage">{health}</span>
               : degraded && tunnelState === 'connected' && selected.kind !== 'xray' ? <span className="hero-stage">Нет связи с серверами ВК — интернет пока напрямую</span>
               : tunnelState === 'connecting' && stage ? <span key={stage} className="hero-stage">{stage}</span>
-              : selected.name}
+              : selected.kind === 'xray' ? (selected.group || 'VLESS') : 'VK TURN · звонки ВК'}
           </div>
           <div className={`hero-stats${tunnelState === 'connected' ? ' hero-stats--on' : ''}`}>
             <StatsCard stats={stats} active={tunnelState === 'connected'} transport={selected?.kind === 'xray' ? selected.transport : undefined} />

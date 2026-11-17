@@ -51,17 +51,22 @@ func (b *Bridge) noteTunnelUp() {
 	b.mu.Unlock()
 }
 
-func (b *Bridge) watchdog(sessID uint64) {
+func (b *Bridge) watchdog(sessID uint64, eventsDone <-chan struct{}) {
 	t := time.NewTicker(watchTick)
 	defer t.Stop()
 	last := wallNow()
-	for range t.C {
+	for {
+		select {
+		case <-eventsDone:
+			return
+		case <-t.C:
+		}
 		now := wallNow()
 		gap := now.Sub(last)
 		last = now
 
 		b.mu.Lock()
-		if b.session != sessID || !b.running {
+		if b.session != sessID || !b.running || b.stopping {
 			b.mu.Unlock()
 			return
 		}

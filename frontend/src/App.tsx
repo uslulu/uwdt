@@ -63,12 +63,14 @@ function useWailsEvents() {
       }),
       EventsOn('state_changed', (status: unknown) => {
         const s = String(status ?? '');
+        const disconnecting = tunnelStore.get() === 'disconnecting';
+        if (disconnecting && (s === 'connected' || s === 'running' || s === 'connecting')) return;
         if (s === 'connected' || s === 'running') { sessionClock.start(); tunnelStore.set('connected'); stageStore.set(''); logStore.push('INFO', '✓ Туннель активен'); }
         else if (s === 'connecting') { sessionClock.stop(); tunnelStore.set('connecting'); statsStore.reset(); stageStore.set('Запускаю подключение…'); logStore.clear(); logStore.push('INFO', '⟳ Подключение...'); }
-        else if (s === 'stopped' || s === 'error' || s === 'disconnected') { sessionClock.stop(); degradedStore.set(false); healthStore.set(''); tunnelStore.set('idle'); statsStore.reset(); stageStore.set(''); logStore.push('INFO', '— Отключено'); }
+        else if (s === 'stopped' || s === 'error' || s === 'disconnected') { sessionClock.stop(); degradedStore.set(false); healthStore.set(''); if (!disconnecting) tunnelStore.set('idle'); statsStore.reset(); stageStore.set(''); logStore.push('INFO', '— Отключено'); }
       }),
       EventsOn('event', (name: unknown) => {
-        if (name === 'wg_config') { sessionClock.start(); tunnelStore.set('connected'); }
+        if (name === 'wg_config' && tunnelStore.get() !== 'disconnecting') { sessionClock.start(); tunnelStore.set('connected'); }
       }),
       EventsOn('health', (message: unknown) => { healthStore.set(String(message ?? '')); }),
       EventsOn('degraded', (v: unknown) => {

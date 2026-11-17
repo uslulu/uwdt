@@ -1,0 +1,103 @@
+/* Формы добавления и редактирования сервера: общие классы sf-* поверх ui.css */
+
+.sf-form { display: flex; flex-direction: column; gap: 12px; }
+
+.sf-note {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-3);
+  margin: -4px 2px 0;
+}
+
+.sf-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-4);
+  font-size: 12px;
+  line-height: 16px;
+}
+.sf-divider::before, .sf-divider::after { content: ''; flex: 1; height: 1px; background: var(--border-2); }
+
+.sf-row { display: flex; gap: 8px; }
+.sf-row .ui-input { flex: 1; }
+.sf-row .sf-port { flex: 0 0 96px; }
+
+.sf-pw-wrap { position: relative; display: flex; align-items: center; }
+.sf-pw-wrap .ui-input { padding-right: 40px; }
+.sf-pw-toggle {
+  position: absolute;
+  right: 4px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--text-4);
+  transition: color 0.2s var(--ease), background 0.2s var(--ease);
+}
+.sf-pw-toggle:hover { color: var(--text); background: var(--bg-2); }
+
+.sf-slider-wrap {
+  padding: 4px 0 12px;
+  border-bottom: 1px solid var(--border-2);
+}
+.sf-slider-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.sf-slider-label span:last-child { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.sf-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  background: linear-gradient(to right, var(--accent) calc(var(--v) * 1%), var(--border) calc(var(--v) * 1%));
+}
+.sf-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  cursor: pointer;
+  transition: transform 0.2s var(--ease);
+}
+.sf-slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.sf-slider:disabled { cursor: not-allowed; opacity: 0.5; }
+.sf-slider:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-dim); }
+
+.sf-hash-btn {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: 'Geist', sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
+}
+.sf-hash-btn:hover { border-color: var(--accent); background: var(--accent-dim); }
+
+.sf-actions { display: flex; gap: 8px; }
+.sf-actions .ui-btn { flex: 1; padding: 12px; }
