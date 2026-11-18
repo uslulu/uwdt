@@ -481,7 +481,7 @@ export default function Connect() {
     : unknown ? 'Состояние сети неизвестно'
     : degraded ? 'Восстановление связи'
     : recentTraffic ? 'Подключено' : 'Туннель включён';
-  const [summary,setSummary] = useState('Что идёт напрямую');
+  const [summary,setSummary] = useState('Исключения из туннеля');
   useEffect(() => {
     let revision = 0;
     function load() {
@@ -848,7 +848,7 @@ export default function Connect() {
           </AnimatePresence>
           <div className="hero-sub">
             {!selected ? <button className="empty-server-action" onClick={openAdd}>Добавить сервер или подписку</button>
-              : recoveryFailed ? 'Откройте «Что идёт напрямую» и проверьте маршрут нужного адреса'
+              : recoveryFailed ? 'Откройте «Исключения из туннеля» и проверьте маршрут нужного адреса'
               : tunnelState === 'idle' ? 'Нажмите кнопку подключения'
               : health && tunnelState === 'connected' ? <span className="hero-stage">{health}</span>
               : degraded && tunnelState === 'connected' && selected.kind !== 'xray' ? <span className="hero-stage">Нет связи с серверами ВК · маршрут не подтверждён</span>

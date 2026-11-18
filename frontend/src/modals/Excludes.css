@@ -223,20 +223,9 @@
   .ex-modal { width: calc(100vw - 48px); }
 }
 
-dialog.direct-dialog { position: fixed; inset: 0; margin: auto; max-height: 85vh; overflow: auto; width: min(540px, 92vw); color: var(--text); overflow-wrap: anywhere; }
-dialog.direct-dialog:not([open]) { display: none; }
-.direct-dialog::backdrop { background: #10121c88; }
-.direct-dialog > * + *, .direct-dialog section > * + * { margin-top: .7rem; }
-.direct-dialog .st-header { justify-content: space-between; }
-.direct-dialog label, .direct-dialog summary { cursor: pointer; }
-.direct-dialog details label { display: block; }
-.direct-dialog input[type=checkbox] { margin-right: .55rem; }
-.direct-dialog form { display: flex; gap: .5rem; }
-.direct-dialog .ex-preset { white-space: normal; }
-.direct-dialog .ex-rule summary { font-size: .85rem; }
-.direct-status { color: var(--text-2); font-size: 13px; white-space: pre-line; max-height: 8em; overflow: auto; }
-.direct-dialog p, .direct-dialog label { line-height: 1.45; }
-.direct-dialog .ex-rule { border-bottom: 1px solid var(--border); padding: .4rem 0; }
-.direct-dialog .ex-rule details { margin-top: .3rem; }
-.direct-dialog .ex-rule details label { padding: .2rem 0; }
-.direct-dialog .ex-open-add { align-self: flex-start; }
+dialog.ex-modal { margin: auto; color: var(--text); }
+dialog.ex-modal:not([open]) { display: none; }
+dialog.ex-modal::backdrop { background: var(--overlay-bg); backdrop-filter: blur(6px); }
+.ex-inspect { margin-top: 12px; font-size: 13px; overflow-wrap: anywhere; }
+.ex-inspect summary { cursor: pointer; color: var(--text-2); }
+.ex-inspect form { display: flex; gap: 8px; margin: 8px 0; }

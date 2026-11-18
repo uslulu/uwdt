@@ -123,7 +123,7 @@ export default function Settings({ onClose }: Props) {
           </div>
 
           <button type="button" className="st-row st-row--link" onClick={() => setShowExcludes(true)}>
-            <span>Что идёт напрямую</span>
+            <span>Исключения из туннеля</span>
             <span className="st-row-value">{[russiaOn ? 'Россия' : '', excludeCount > 0 ? String(excludeCount) : ''].filter(Boolean).join(' + ') || 'нет'}<IconChevronRight size={16} /></span>
           </button>
 
