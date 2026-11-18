@@ -78,7 +78,7 @@
   line-height: 16px;
   text-align: center;
 }
-.ex-preset--on .ex-preset-count { background: rgba(255, 255, 255, 0.25); color: var(--accent-fg); }
+.ex-preset--on .ex-preset-count { background: color-mix(in srgb, var(--accent-fg) 10%, transparent); color: var(--accent-fg); }
 
 /* Добавление своего исключения */
 .ex-add { display: flex; gap: 8px; }

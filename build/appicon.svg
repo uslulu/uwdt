@@ -1,21 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5fb4ff"/>
-      <stop offset="1" stop-color="#1f63e6"/>
+      <stop offset="0" stop-color="#dc9578"/>
+      <stop offset="1" stop-color="#a34f34"/>
     </linearGradient>
     <radialGradient id="glass" cx="38%" cy="32%" r="75%">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
       <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.10"/>
-      <stop offset="1" stop-color="#0b3fa8" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#733820" stop-opacity="0.25"/>
     </radialGradient>
     <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#bfe3ff"/>
-      <stop offset="1" stop-color="#3d8dff"/>
+      <stop offset="0" stop-color="#f1c6ae"/>
+      <stop offset="1" stop-color="#bf6c50"/>
     </linearGradient>
     <clipPath id="ball"><circle cx="512" cy="512" r="300"/></clipPath>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#06215e" flood-opacity="0.35"/>
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#47291f" flood-opacity="0.35"/>
     </filter>
   </defs>
 

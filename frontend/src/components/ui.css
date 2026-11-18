@@ -73,7 +73,7 @@
 .ui-btn--secondary { border-color: var(--border); color: var(--text-2); background: var(--surface); }
 .ui-btn--secondary:hover:not(:disabled) { border-color: var(--text-3); color: var(--text); background: var(--surface-2); }
 
-.ui-btn--danger { background: var(--err); color: #ffffff; }
+.ui-btn--danger { background: var(--err); color: var(--accent-fg); }
 .ui-btn--danger:hover:not(:disabled) { opacity: 0.88; }
 
 .ui-btn--block { width: 100%; padding: 12px; }

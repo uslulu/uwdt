@@ -53,102 +53,102 @@
 :root {
   color-scheme: light;
 
-  --bg: #f4f6f8;
-  --bg-2: #eaecef;
-  --bg-3: #e0e4e9;
-  --surface: #ffffff;
-  --surface-2: #f7f8fa;
+  --bg: #faf9f5;
+  --bg-2: #f1efe7;
+  --bg-3: #e8e6dc;
+  --surface: #fffefa;
+  --surface-2: #f7f5ee;
 
-  --border: #dbe1e8;
-  --border-2: #e7ebf0;
+  --border: #d9d5c9;
+  --border-2: #e8e6dc;
 
-  --text: #141b24;
-  --text-2: #3e4a5a;
-  --text-3: #68778c;
-  --text-4: #9aa5b5;
+  --text: #141413;
+  --text-2: #48463f;
+  --text-3: #625f56;
+  --text-4: #69665d;
 
-  --accent: #2f7df0;
-  --accent-dim: rgba(47, 125, 240, 0.12);
-  --accent-fg: #ffffff;
-  --accent-hover: #2a70da;
+  --accent: #98482e;
+  --accent-dim: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-fg: #fffbf6;
+  --accent-hover: #803a25;
 
-  --violet: #7c5cf0;
-  --violet-dim: rgba(124, 92, 240, 0.12);
+  --subscription: #536340;
+  --subscription-dim: color-mix(in srgb, var(--subscription) 10%, transparent);
 
-  --ok: #16a34a;
-  --ok-dim: rgba(22, 163, 74, 0.12);
-  --warn: #c77700;
-  --warn-dim: rgba(199, 119, 0, 0.12);
-  --err: #dc2626;
-  --err-dim: rgba(220, 38, 38, 0.10);
+  --ok: #456039;
+  --ok-dim: color-mix(in srgb, var(--ok) 10%, transparent);
+  --warn: #825d1c;
+  --warn-dim: color-mix(in srgb, var(--warn) 10%, transparent);
+  --err: #a33d38;
+  --err-dim: color-mix(in srgb, var(--err) 10%, transparent);
 
-  --seg-bg: #eaecef;
-  --input-border: #ccd4de;
-  --input-bg: #ffffff;
+  --seg-bg: #f0eee6;
+  --input-border: #b6b1a3;
+  --input-bg: #fffefa;
 
   --r-sm: 8px;
   --r-md: 12px;
   --r-lg: 16px;
 
-  --shadow: 0 16px 48px rgba(15, 30, 50, 0.16);
-  --shadow-sm: 0 2px 10px rgba(15, 30, 50, 0.07);
-  --overlay-bg: rgba(12, 24, 40, 0.28);
+  --shadow: 0 16px 48px rgba(42, 38, 31, 0.16);
+  --shadow-sm: 0 2px 10px rgba(42, 38, 31, 0.07);
+  --overlay-bg: rgba(39, 35, 29, 0.28);
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* пузырь */
-  --water-top: #7cc4ff;
-  --water-bottom: #2f7dff;
-  --glass-edge: rgba(47, 140, 255, 0.28);
+  --water-top: #e6a78e;
+  --water-bottom: #b85e3f;
+  --glass-edge: rgba(181, 95, 65, 0.36);
   --glass-hi: rgba(255, 255, 255, 0.95);
-  --glow: rgba(47, 140, 255, 0.35);
+  --glow: rgba(204, 120, 92, 0.30);
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #181818;
-  --bg-2: #1f1f1f;
-  --bg-3: #272727;
-  --surface: #1f1f1f;
-  --surface-2: #272727;
+  --bg: #262624;
+  --bg-2: #30302d;
+  --bg-3: #3a3935;
+  --surface: #30302e;
+  --surface-2: #343430;
 
-  --border: #313131;
-  --border-2: #2a2a2a;
+  --border: #4f4d46;
+  --border-2: #42413b;
 
-  --text: #ececec;
-  --text-2: #bababa;
-  --text-3: #8b8b8b;
-  --text-4: #616161;
+  --text: #faf9f5;
+  --text-2: #d9d6cb;
+  --text-3: #bebab0;
+  --text-4: #aaa69b;
 
-  --accent: #5b9dff;
-  --accent-dim: rgba(91, 157, 255, 0.16);
-  --accent-fg: #081420;
-  --accent-hover: #74adff;
+  --accent: #e6a087;
+  --accent-dim: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-fg: #241e1b;
+  --accent-hover: #f0b69f;
 
-  --violet: #a78bfa;
-  --violet-dim: rgba(167, 139, 250, 0.15);
+  --subscription: #b4c599;
+  --subscription-dim: color-mix(in srgb, var(--subscription) 10%, transparent);
 
-  --ok: #3fb96b;
-  --ok-dim: rgba(63, 185, 107, 0.15);
-  --warn: #d9a13c;
-  --warn-dim: rgba(217, 161, 60, 0.15);
-  --err: #e05252;
-  --err-dim: rgba(224, 82, 82, 0.14);
+  --ok: #abc796;
+  --ok-dim: color-mix(in srgb, var(--ok) 10%, transparent);
+  --warn: #e4c17b;
+  --warn-dim: color-mix(in srgb, var(--warn) 10%, transparent);
+  --err: #f2a19a;
+  --err-dim: color-mix(in srgb, var(--err) 10%, transparent);
 
-  --seg-bg: #272727;
-  --input-border: #3a3a3a;
-  --input-bg: #242424;
+  --seg-bg: #242422;
+  --input-border: #68655b;
+  --input-bg: #2b2b28;
 
   --shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
   --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.35);
   --overlay-bg: rgba(0, 0, 0, 0.55);
 
-  --water-top: #5ab4ff;
-  --water-bottom: #1f5fd6;
-  --glass-edge: rgba(90, 180, 255, 0.30);
+  --water-top: #dc9578;
+  --water-bottom: #ba6749;
+  --glass-edge: rgba(224, 155, 128, 0.38);
   --glass-hi: rgba(255, 255, 255, 0.55);
-  --glow: rgba(74, 163, 255, 0.40);
+  --glow: rgba(204, 120, 92, 0.32);
 }
 
 /* ---- Типографика: именованные стили (шкала Tailwind) ------------------ */

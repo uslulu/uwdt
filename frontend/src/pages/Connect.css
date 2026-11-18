@@ -260,9 +260,9 @@
 }
 
 /* Разделы списка серверов: VK TURN и подписки. Заголовок раздела прилипает
-   при прокрутке. Цвет различает способ: VK — синий, подписка — фиолетовый. */
+   при прокрутке. Цвет различает способ: VK — терракотовый, подписка — шалфейный. */
 .server-section { --sec: var(--accent); --sec-dim: var(--accent-dim); }
-.server-section--sub { --sec: var(--violet); --sec-dim: var(--violet-dim); }
+.server-section--sub { --sec: var(--subscription); --sec-dim: var(--subscription-dim); }
 .server-section + .server-section { border-top: 4px solid var(--bg-2); }
 
 .ss-head {
@@ -355,7 +355,7 @@
   white-space: nowrap;
 }
 .mode-chip--turn { color: var(--accent); background: var(--accent-dim); }
-.mode-chip--sub { color: var(--violet); background: var(--violet-dim); }
+.mode-chip--sub { color: var(--subscription); background: var(--subscription-dim); }
 
 /* Выбор иконки сервера */
 .icon-picker {
@@ -408,11 +408,11 @@
   box-shadow: 0 0 24px var(--glow);
 }
 
-/* Подписка — фиолетовая вода, VK TURN — синяя */
-.power-btn--sub { --water-top: #c4b5fd; --water-bottom: #7c3aed; --glass-edge: rgba(139, 92, 246, 0.32); --glow: rgba(139, 92, 246, 0.38); }
-[data-theme="dark"] .power-btn--sub { --water-top: #a78bfa; --water-bottom: #6d28d9; --glass-edge: rgba(167, 139, 250, 0.32); --glow: rgba(139, 92, 246, 0.45); }
-.power-btn--sub .bubble--idle .bubble-icon, .power-btn--sub .bubble--connecting .bubble-icon { color: var(--violet); }
-.power-btn--sub:focus-visible { outline-color: var(--violet); }
+/* Подписка — шалфейная вода, VK TURN — терракотовая */
+.power-btn--sub { --water-top: #bcc7a6; --water-bottom: #697c56; --glass-edge: rgba(109, 128, 87, 0.32); --glow: rgba(109, 128, 87, 0.38); }
+[data-theme="dark"] .power-btn--sub { --water-top: #b1c298; --water-bottom: #687c54; --glass-edge: rgba(177, 194, 152, 0.32); --glow: rgba(109, 128, 87, 0.45); }
+.power-btn--sub .bubble--idle .bubble-icon, .power-btn--sub .bubble--connecting .bubble-icon { color: var(--subscription); }
+.power-btn--sub:focus-visible { outline-color: var(--subscription); }
 
 @media (prefers-reduced-motion: reduce) {
   .status-dot--connecting, .status-dot--disconnecting { animation: none; opacity: 1; }
