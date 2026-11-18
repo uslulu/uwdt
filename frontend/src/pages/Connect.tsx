@@ -10,19 +10,21 @@ import {
   IconServer, IconGlobe, IconLockFilled, IconWifi, IconTrash, IconRefresh, IconBrandVk, IconListDetails,
 } from '@tabler/icons-react';
 import AddServer from '../modals/Add-server';
+import Excludes from '../modals/Excludes';
+import { directSummary } from '../lib/presets';
 import EditServer from '../modals/Edit-server';
 import { serverStore, settingsStore } from '../lib/store';
 import { tunnelStore } from '../lib/stores/tunnelStore';
 import { toastStore } from '../lib/stores/toastStore';
 import { logStore } from '../lib/stores/logStore';
 import { wdttLinkStore } from '../lib/utils/wdttLink';
-import { SaveProfile } from '../../wailsjs/go/backend/App';
+import { CreateProfile } from '../../wailsjs/go/backend/App';
 import type { Server, TunnelState } from '../lib/types';
-import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles, ConnectXray, FetchSubscription, PingServers, GetRussiaDirect } from '../../wailsjs/go/backend/App';
+import { Connect as WailsConnect, Disconnect as WailsDisconnect, ListProfiles, ConnectXray, FetchSubscription, PingServers, CancelPings, RuleStatus, GetExcludes, GetRussiaDirect } from '../../wailsjs/go/backend/App';
 import type { backend } from '../../wailsjs/go/models';
 import Bubble from '../components/Bubble';
 import { statsStore, formatRate, formatDuration, sessionClock, type TunnelStats } from '../lib/stores/statsStore';
-import { stageStore, degradedStore } from '../lib/stores/stageStore';
+import { stageStore, degradedStore, healthStore } from '../lib/stores/stageStore';
 import { IconArrowDown, IconArrowUp, IconPlugConnected, IconClock } from '@tabler/icons-react';
 import './Connect.css';
 
@@ -76,7 +78,7 @@ function ServerIcon({ iconKey, size }: { iconKey?: string; size: number }) {
 
 const TUNNEL_LABEL: Record<TunnelState, string> = {
   idle: 'Подключить',
-  connecting: 'Подключение...',
+  connecting: 'Отменить подключение',
   connected: 'Отключить',
   disconnecting: 'Отключение...',
 };
@@ -119,7 +121,7 @@ function PowerButton({ tunnelState, linkFlash, selected, onTunnel }: {
       type="button"
       className={`power-btn${linkFlash ? ' power-btn--flash' : ''}${selected?.kind === 'xray' ? ' power-btn--sub' : ''}`}
       onClick={onTunnel}
-      disabled={!selected}
+      disabled={!selected || tunnelState === 'disconnecting'}
       title={selected ? TUNNEL_LABEL[tunnelState] : 'Добавьте сервер'}
       aria-label={selected ? TUNNEL_LABEL[tunnelState] : 'Добавьте сервер'}
     >
@@ -387,7 +389,7 @@ export default function Connect() {
   const [listOpen, setListOpen] = useState(false);
 
   useEffect(() => {
-    ListProfiles().then(profiles => {
+    ListProfiles().then(async profiles => {
       if (!profiles) return;
       const existing = serverStore.getAll();
       let changed = false;
@@ -397,13 +399,13 @@ export default function Connect() {
         const stored = existing.find(s => s.name === name || s.host === host);
         if (stored) {
           if (p.workers && stored.power !== p.workers) {
-            serverStore.update({ ...stored, power: p.workers });
+            await serverStore.update({ ...stored, power: p.workers });
             changed = true;
           }
           continue;
         }
         const h4: [string,string,string,string] = [p.hashes?.[0]??'', p.hashes?.[1]??'', p.hashes?.[2]??'', p.hashes?.[3]??''];
-        serverStore.add({ name, host, password: p.password ?? '', hashes: h4, power: p.workers });
+        await serverStore.add({ name, host, password: p.password ?? '', hashes: h4, power: p.workers });
         changed = true;
       }
       if (changed) {
@@ -422,6 +424,8 @@ export default function Connect() {
   useEffect(() => statsStore.subscribe(setStats), []);
   const [stage, setStage] = useState('');
   useEffect(() => stageStore.subscribe(setStage), []);
+  const [health, setHealth] = useState('');
+  useEffect(() => healthStore.subscribe(setHealth), []);
   const [degraded, setDegraded] = useState(false);
   useEffect(() => degradedStore.subscribe(setDegraded), []);
   const shownState: TunnelState = tunnelState === 'connected' && degraded ? 'connecting' : tunnelState;
@@ -440,6 +444,56 @@ export default function Connect() {
   }, [selected?.id]);
 
   const [addServerOpen, setAddServerOpen] = useState(false);
+  const addOpener = useRef<HTMLButtonElement | null>(null);
+  function openAdd(event: React.MouseEvent<HTMLButtonElement>) {
+    addOpener.current = event.currentTarget;
+    setAddServerOpen(true);
+  }
+  useEffect(() => {
+    if (addServerOpen || !addOpener.current) return;
+    const opener = addOpener.current;
+    addOpener.current = null;
+    if (opener.isConnected) opener.focus();
+    else document.querySelector<HTMLButtonElement>('.power-btn')?.focus();
+  }, [addServerOpen]);
+  const [rulesOpen,setRulesOpen] = useState(false);
+  const [ruleState,setRuleState]=useState('');
+  useEffect(() => {
+    let live=true;let timer:ReturnType<typeof setTimeout>;
+    async function poll(){try{const s=await RuleStatus();if(live)setRuleState(s);}catch{if(live)setRuleState('Состояние неизвестно');}
+      if(live && tunnelState!=='idle')timer=setTimeout(poll,1500);
+    }
+    void poll();return () => {live=false;clearTimeout(timer);};
+  },[tunnelState]);
+  const [clock, setClock] = useState(Date.now);
+  useEffect(() => {
+    if (tunnelState !== 'connected') return;
+    const tick = () => setClock(Date.now());
+    const timer = setInterval(tick, 3000);
+    window.addEventListener('focus', tick);
+    return () => { clearInterval(timer); window.removeEventListener('focus', tick); };
+  }, [tunnelState]);
+  const recentTraffic = stats && stats.active > 0 && stats.receivedAt > 0 && clock - stats.receivedAt < 15000;
+  const unknown = ruleState.includes('helper завершился') || ruleState === 'Состояние неизвестно' || health.startsWith('Не удалось') || health.includes('не удалось');
+  const recoveryFailed = ruleState.startsWith('Ошибка восстановления сети');
+  const title = recoveryFailed ? 'Восстановление сети не подтверждено'
+    : tunnelState !== 'connected' ? STATUS_TITLE[tunnelState]
+    : unknown ? 'Состояние сети неизвестно'
+    : degraded ? 'Восстановление связи'
+    : recentTraffic ? 'Подключено' : 'Туннель включён';
+  const [summary,setSummary] = useState('Что идёт напрямую');
+  useEffect(() => {
+    let revision = 0;
+    function load() {
+      const id = ++revision;
+      Promise.all([GetExcludes(),GetRussiaDirect()]).then(([entries,ru]) => {
+        if (id !== revision) return;
+        setSummary(directSummary(entries ?? [],ru.enabled));
+      }).catch(() => {});
+    }
+    load(); window.addEventListener('direct-rules-changed',load);
+    return () => {++revision;window.removeEventListener('direct-rules-changed',load);};
+  }, []);
   const [editServer, setEditServer] = useState<Server | null>(null);
 
   const [linkFlash, setLinkFlash] = useState(false);
@@ -467,14 +521,14 @@ export default function Connect() {
         while (existingNames.includes(`${autoName} ${counter}`)) counter++;
         const name = `${autoName} ${counter}`;
 
-        await SaveProfile(name, {
+        await CreateProfile(name, {
           peer: consumed.host,
           password: consumed.password,
           hashes: h4 as unknown as string[],
           workers: consumed.workers,
           turn: '', port: consumed.port || '', device_id: '', listen: '', turn_tcp: false,
         });
-        const s = serverStore.add({
+        const s = await serverStore.add({
           name,
           host: consumed.host,
           password: consumed.password,
@@ -482,7 +536,7 @@ export default function Connect() {
           power: consumed.workers,
         });
         setServers(serverStore.getAll());
-        setSelected({ ...s });
+        if (tunnelStore.get() === 'idle') setSelected({ ...s });
         setLinkFlash(true);
         if (linkFlashTimerRef.current) clearTimeout(linkFlashTimerRef.current);
         linkFlashTimerRef.current = setTimeout(() => setLinkFlash(false), 800);
@@ -504,11 +558,6 @@ export default function Connect() {
     if (connectingRef.current) return; // guard от двойного клика
     connectingRef.current = true;
     if (cur.kind === 'xray') {
-      // Российские сервисы сообщают IP VPN-серверов в РКН — без «Россия напрямую»
-      // они увидят адрес твоего сервера
-      GetRussiaDirect().then(r => {
-        if (r && !r.enabled) toastStore.show('«Россия напрямую» выключена — российские сайты увидят IP сервера подписки. Включите в «Исключениях».', 8000);
-      }).catch(() => {});
       tunnelStore.set('connecting');
       logStore.clear();
       try {
@@ -517,7 +566,7 @@ export default function Connect() {
         const msg = e instanceof Error ? e.message : String(e);
         logStore.push('ERROR', msg);
         toastStore.show(msg, 6000);
-        tunnelStore.set('idle');
+        if (tunnelStore.get() !== 'disconnecting') tunnelStore.set('idle');
       } finally {
         connectingRef.current = false;
       }
@@ -547,33 +596,25 @@ export default function Connect() {
       const msg = e instanceof Error ? e.message : String(e);
       logStore.push('ERROR', msg);
       toastStore.show(msg, 6000);
-      tunnelStore.set('idle');
+      if (tunnelStore.get() !== 'disconnecting') tunnelStore.set('idle');
     } finally {
       connectingRef.current = false;
     }
   };
 
-  const reconnectAtRef = useRef(0);
-
   const handleTunnel = async () => {
     if (!selectedRef.current) return;
-    if (tunnelState === 'idle') {
-      if (Date.now() < reconnectAtRef.current) {
-        const secs = Math.ceil((reconnectAtRef.current - Date.now()) / 1000);
-        toastStore.show(`Подождите ${secs} сек.`, 2000);
-        return;
-      }
-      toastStore.show('Убедитесь что другие VPN отключены', 4000);
+    const state = tunnelStore.get();
+    if (state === 'idle') {
       await doConnect();
-    } else if (tunnelState === 'connected' || tunnelState === 'connecting') {
+    } else if (state === 'connected' || state === 'connecting') {
       tunnelStore.set('disconnecting');
       try {
         await WailsDisconnect();
-      } catch {
-        // игнорируем ошибку disconnect
+      } catch (e) {
+        toastStore.show(String(e),6000);
       } finally {
         tunnelStore.set('idle');
-        reconnectAtRef.current = Date.now() + 4000;
       }
     }
   };
@@ -608,15 +649,18 @@ export default function Connect() {
     }
   };
 
-  const handleAdd = (data: Omit<Server, 'id'>) => {
-    const s = serverStore.add(data);
+  const handleAdd = async (data: Omit<Server, 'id'>) => {
+    const s = await serverStore.add(data);
     setServers(serverStore.getAll());
-    setSelected(s);
+    if (tunnelStore.get() === 'idle') {
+      setSelected(s);
+    }
+    else toastStore.show('Сервер добавлен в список');
   };
 
   // Подписку добавляем целиком; повторная загрузка той же ссылки заменяет её серверы
   // (иконки и выбранный сервер сохраняются по имени)
-  const applySubscription = (sub: backend.Subscription, silent = false) => {
+  const applySubscription = async (sub: backend.Subscription, silent = false) => {
     const all = serverStore.getAll();
     const old = all.filter(s => s.subUrl === sub.url);
     const firstIdx = all.findIndex(s => s.subUrl === sub.url);
@@ -630,13 +674,13 @@ export default function Connect() {
       };
     });
     const at = firstIdx < 0 ? others.length : Math.min(firstIdx, others.length);
-    serverStore.save([...others.slice(0, at), ...fresh, ...others.slice(at)]);
+    await serverStore.save([...others.slice(0, at), ...fresh, ...others.slice(at)]);
     setServers(serverStore.getAll());
     const cur = selectedRef.current;
     if (!silent) {
-      setSelected(fresh.find(a => a.id === cur?.id) ?? fresh[0] ?? cur);
+      if (tunnelStore.get() === 'idle') setSelected(fresh.find(a => a.id === cur?.id) ?? fresh[0] ?? cur);
       toastStore.show(`«${sub.title}»: ${serversCount(fresh.length)}${sub.skipped ? `, пропущено ${sub.skipped} (протокол пока не поддерживается)` : ''}`, 4000);
-    } else if (cur?.subUrl === sub.url) {
+    } else if (tunnelStore.get() === 'idle' && cur?.subUrl === sub.url) {
       setSelected(fresh.find(a => a.id === cur.id) ?? cur);
     }
   };
@@ -645,16 +689,18 @@ export default function Connect() {
   const [pings, setPings] = useState<Record<string, number>>({});
   const [pinging, setPinging] = useState(false);
   const pingedAtRef = useRef(0);
+  const pingGeneration=useRef(0);
   const pingAll = async () => {
     const links = serverStore.getAll().filter(s => s.kind === 'xray' && s.link).map(s => s.link!);
-    if (links.length === 0 || pinging) return;
+    if (links.length === 0) return;
+    const revision=++pingGeneration.current;
     setPinging(true);
     setPings({});
     try {
-      setPings((await PingServers(links)) ?? {});
+      const results=await PingServers(links);if(revision!==pingGeneration.current)return;setPings(results ?? {});
       pingedAtRef.current = Date.now();
     } catch { /* без пинга список всё равно работает */ } finally {
-      setPinging(false);
+      if(revision===pingGeneration.current)setPinging(false);
     }
   };
 
@@ -662,7 +708,7 @@ export default function Connect() {
   const refreshSub = async (url: string, silent = false) => {
     setBusySub(url);
     try {
-      applySubscription(await FetchSubscription(url), silent);
+      await applySubscription(await FetchSubscription(url), silent);
     } catch (e) {
       if (!silent) toastStore.show(`Подписка не обновилась: ${String(e)}`, 5000);
     } finally {
@@ -679,6 +725,7 @@ export default function Connect() {
   // queueMicrotask: состояние меняется уже после эффекта, а не синхронно внутри него
   useEffect(() => { queueMicrotask(refreshStaleSubs); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const cancelPings=() => {++pingGeneration.current;void CancelPings();setPinging(false);};
   // Пинг — при открытии списка, если прошлый старше двух минут
   useEffect(() => {
     if (!listOpen) return;
@@ -686,6 +733,7 @@ export default function Connect() {
       refreshStaleSubs();
       if (Date.now() - pingedAtRef.current > 2 * 60 * 1000) pingAll();
     });
+    return cancelPings;
   }, [listOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRefreshSub = async (url: string) => {
@@ -694,52 +742,56 @@ export default function Connect() {
   };
 
   // Подписку удаляем целиком, с «Вернуть»
-  const handleDeleteSub = (g: ServerGroup) => {
+  const handleDeleteSub = async (g: ServerGroup) => {
     if (tunnelState !== 'idle' && selected?.subUrl === g.url) {
       toastStore.show('Сначала отключитесь от сервера этой подписки', 4000);
       return;
     }
     const before = serverStore.getAll();
-    serverStore.save(before.filter(s => s.subUrl !== g.url));
+    await serverStore.save(before.filter(s => s.subUrl !== g.url));
     const all = serverStore.getAll();
     setServers(all);
     if (selected?.subUrl === g.url) setSelected(all[0] ?? null);
     toastStore.show(`Подписка «${g.title}» удалена`, 6000, {
       label: 'Вернуть',
-      run: () => {
+      run: async () => {
         if (serverStore.getAll().some(s => s.subUrl === g.url)) return;
-        serverStore.save(before);
+        await serverStore.save(before);
         setServers(serverStore.getAll());
       },
     });
   };
 
   // Сервер подписки удаляем сразу, с «Вернуть»
-  const handleRemoveXray = (server: Server) => {
+  const handleRemoveXray = async (server: Server) => {
     const before = serverStore.getAll();
+    if (tunnelStore.get() !== 'idle' && selectedRef.current?.id === server.id) {
+      toastStore.show('Сначала отключитесь от этого сервера');
+      return;
+    }
     const idx = before.findIndex(s => s.id === server.id);
-    handleDelete(server.id);
+    await handleDelete(server.id);
     toastStore.show(`Удалён: ${server.name}`, 5000, {
       label: 'Вернуть',
-      run: () => {
+      run: async () => {
         const cur = serverStore.getAll();
         if (cur.some(s => s.id === server.id)) return;
         cur.splice(Math.min(idx, cur.length), 0, server);
-        serverStore.save(cur);
+        await serverStore.save(cur);
         setServers(serverStore.getAll());
       },
     });
   };
 
-  const handleSave = (server: Server) => {
-    serverStore.update(server);
+  const handleSave = async (server: Server) => {
+    await serverStore.update(server);
     const all = serverStore.getAll();
     setServers(all);
     if (selected?.id === server.id) setSelected(server);
   };
 
-  const handleDelete = (id: string) => {
-    serverStore.remove(id);
+  const handleDelete = async (id: string) => {
+    await serverStore.remove(id);
     const all = serverStore.getAll();
     setServers(all);
     if (selected?.id === id) setSelected(all[0] ?? null);
@@ -753,10 +805,10 @@ export default function Connect() {
     setIconMenu({ server, x: rect.left, y: rect.top });
   };
 
-  const handlePickIcon = (key: string) => {
+  const handlePickIcon = async (key: string) => {
     if (!iconMenu) return;
     const updated = { ...iconMenu.server, icon: key };
-    serverStore.update(updated);
+    await serverStore.update(updated);
     const all = serverStore.getAll();
     setServers(all);
     if (selected?.id === iconMenu.server.id) setSelected(updated);
@@ -766,37 +818,46 @@ export default function Connect() {
   return (
     <>
       <main className="main">
-        <button type="button" className="btn-add" onClick={() => setAddServerOpen(true)} aria-label="Добавить сервер">
+        <button type="button" className="btn-add" onClick={openAdd} aria-label="Добавить сервер">
           <IconPlus stroke={2} size={22} />
         </button>
 
         <div className="hero">
           <PowerButton
-            tunnelState={shownState}
+            tunnelState={tunnelState}
             linkFlash={linkFlash}
             selected={selected}
             onTunnel={handleTunnel}
           />
+          <div role="status" className={`status-chip${title === 'Подключено' ? ' status-chip--connected' : ''}${shownState === 'connecting' || shownState === 'disconnecting' ? ` status-chip--${shownState}` : ''}`}>
+            <span className={`status-dot status-dot--${shownState === 'connected' && title !== 'Подключено' ? 'idle' : shownState}`} />
+            {!selected ? 'Нет серверов' : title}
+          </div>
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
-              key={!selected ? 'none' : degraded && tunnelState === 'connected' ? 'degraded' : tunnelState}
+              key={selected?.id ?? 'none'}
               className="hero-title"
+              title={selected?.name}
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.18 }}
             >
-              {!selected ? 'Нет серверов' : degraded && tunnelState === 'connected' ? 'Восстанавливаю связь…' : STATUS_TITLE[tunnelState]}
+              {selected ? selected.name : 'UWDT'}
             </motion.div>
           </AnimatePresence>
           <div className="hero-sub">
-            {!selected ? 'Добавьте сервер кнопкой «+»'
-              : tunnelState === 'idle' ? 'Нажмите на пузырь, чтобы подключиться'
-              : degraded && tunnelState === 'connected' && selected.kind !== 'xray' ? <span className="hero-stage">Нет связи с серверами ВК — интернет пока напрямую</span>
+            {!selected ? <button className="empty-server-action" onClick={openAdd}>Добавить сервер или подписку</button>
+              : recoveryFailed ? 'Откройте «Что идёт напрямую» и проверьте маршрут нужного адреса'
+              : tunnelState === 'idle' ? 'Нажмите кнопку подключения'
+              : health && tunnelState === 'connected' ? <span className="hero-stage">{health}</span>
+              : degraded && tunnelState === 'connected' && selected.kind !== 'xray' ? <span className="hero-stage">Нет связи с серверами ВК · маршрут не подтверждён</span>
               : tunnelState === 'connecting' && stage ? <span key={stage} className="hero-stage">{stage}</span>
-              : selected.name}
+              : tunnelState === 'connected' && !recentTraffic ? 'Пока нет свежих данных о входящем трафике'
+              : selected.kind === 'xray' ? (selected.group || 'VLESS') : 'VK TURN · звонки ВК'}
           </div>
-          <div className={`hero-stats${tunnelState === 'connected' ? ' hero-stats--on' : ''}`}>
+          <button className="direct-summary" onClick={() => setRulesOpen(true)}>{summary}{(tunnelState !== 'idle' || ruleState.startsWith('Ошибка')) && ruleState && ' · '+(ruleState.startsWith('Ошибка') ? 'Ошибка · подробнее' : ruleState.startsWith('Нет IPv4') ? 'Часть правил не применена' : ruleState)}</button>
+          <div aria-hidden={tunnelState !== 'connected'} className={`hero-stats${tunnelState === 'connected' ? ' hero-stats--on' : ''}`}>
             <StatsCard stats={stats} active={tunnelState === 'connected'} transport={selected?.kind === 'xray' ? selected.transport : undefined} />
           </div>
         </div>
@@ -817,6 +878,7 @@ export default function Connect() {
           onDeleteSub={handleDeleteSub}
         />
 
+        {rulesOpen && <Excludes onClose={() => setRulesOpen(false)} />}
         {addServerOpen && <AddServer onClose={() => setAddServerOpen(false)} onAdd={handleAdd} onAddSubscription={handleAddSubscription} />}
         {editServer && (
           <EditServer

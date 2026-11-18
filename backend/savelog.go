@@ -1,12 +1,13 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 	"time"
 
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -35,19 +36,45 @@ func (a *App) SaveLogs() (string, error) {
 		return "", err
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "UWDT %s · %s/%s · %s\n", Version, runtime.GOOS, runtime.GOARCH, time.Now().Format("2006-01-02 15:04:05"))
-	s := a.store.LoadSettings()
-	fmt.Fprintf(&b, "Обфускация: %s · TCP: %v · Россия напрямую: %v · исключений: %d\n", s.ObfsMode, s.TurnTCP, s.RussiaDirect, len(s.Excludes))
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		fmt.Fprintf(&b, "\n===== %s =====\n", filepath.Base(f))
-		b.Write(data)
+	if err := a.bridge.flushLog(); err != nil {
+		return "", err
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	out, err := os.CreateTemp(filepath.Dir(path), ".uwdt-log-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(out.Name())
+	defer out.Close()
+	if _, err = fmt.Fprintf(out, "UWDT %s · %s/%s\n", Version, runtime.GOOS, runtime.GOARCH); err != nil {
+		return "", err
+	}
+	settings := a.store.LoadSettings()
+	if _, err = fmt.Fprintf(out, "Обфускация: %s · TCP: %v · Россия напрямую: %v · исключений: %d\n", settings.ObfsMode, settings.TurnTCP, settings.RussiaDirect, len(settings.Excludes)); err != nil {
+		return "", err
+	}
+	for _, path := range files {
+		for _, part := range []string{path + ".previous", path} {
+			file, err := os.Open(part)
+			if errors.Is(err, os.ErrNotExist) && part != path {
+				continue
+			}
+			if err != nil {
+				return "", err
+			}
+			_, err = fmt.Fprintf(out, "\n===== %s =====\n", filepath.Base(part))
+			if err == nil {
+				_, err = io.Copy(out, file)
+			}
+			file.Close()
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if err = out.Close(); err != nil {
+		return "", err
+	}
+	if err = os.Rename(out.Name(), path); err != nil {
 		return "", err
 	}
 	return path, nil

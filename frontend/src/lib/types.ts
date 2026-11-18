@@ -25,6 +25,7 @@ export interface AppSettings {
 }
 
 export interface ExcludeEntry {
+  source?: string;
   value: string;
   enabled: boolean;
 }

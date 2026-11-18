@@ -8,18 +8,16 @@ func (w *WG) applyDarwin(conf string, turnIPs []string, logf wgLogFunc) error {
 	return fmt.Errorf("darwin not supported on this platform")
 }
 
-func (w *WG) teardownDarwin() {}
+func (w *WG) teardownDarwin() error { return nil }
 
-// Заглушка для Linux/Windows
-func cleanupStaleExcludeRoutesDarwin(_ wgLogFunc) {}
-
-// На Linux/Windows исключения применяются при подключении
-func (w *WG) refreshExcludesDarwin(logf wgLogFunc) {
-	logf("Исключения сохранены — применятся при следующем подключении")
-}
+func (w *WG) refreshExcludesDarwinSession(wgLogFunc, uint64) {}
 
 func (w *WG) setTunnelRoutesDarwin(_ bool) error { return nil }
 
 func (w *WG) applyXrayDarwin(link string, serverIPs []string, logf wgLogFunc) error {
 	return fmt.Errorf("darwin not supported on this platform")
 }
+
+func (w *WG) logRoutesDarwin() {}
+
+func (w *WG) helperAlive() bool { return true }

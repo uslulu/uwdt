@@ -741,7 +741,8 @@ func solveCaptchaBySelectedMode(
 }
 
 func requestWebViewCaptcha(streamID int, captchaErr *VkCaptchaError, mode string, timeout time.Duration) (string, error) {
-	if CaptchaResultChan == nil || captchaErr == nil || captchaErr.RedirectURI == "" || captchaErr.SessionToken == "" {
+	ac := getActiveCore()
+	if ac == nil || captchaErr == nil || captchaErr.RedirectURI == "" || captchaErr.SessionToken == "" {
 		return "", fmt.Errorf("webview captcha data is incomplete")
 	}
 	mode = strings.ToLower(strings.TrimSpace(mode))
@@ -757,18 +758,19 @@ func requestWebViewCaptcha(streamID int, captchaErr *VkCaptchaError, mode string
 	if mode == "auto" && !DesktopAutoWebView {
 		return "", fmt.Errorf("auto webview недоступен на десктопе")
 	}
-	drainCaptchaResult()
+	select {
+	case <-ac.CaptchaResultChan:
+	default:
+	}
 	fmt.Printf("CAPTCHA_SOLVE|%s|%s|%s\n", mode, captchaErr.RedirectURI, captchaErr.SessionToken)
 	// Десктоп: приложение открывает окно капчи по событию и возвращает токен через SolveCaptcha
-	if ac := getActiveCore(); ac != nil {
-		ac.emitCaptchaRequest(mode, captchaErr.RedirectURI, captchaErr.SessionToken)
-	}
+	ac.emitCaptchaRequest(mode, captchaErr.RedirectURI, captchaErr.SessionToken)
 
-	waitCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	waitCtx, cancel := context.WithTimeout(ac.ctx, timeout)
 	defer cancel()
 
 	select {
-	case result := <-CaptchaResultChan:
+	case result := <-ac.CaptchaResultChan:
 		result = strings.TrimSpace(result)
 		if result == "" {
 			return "", fmt.Errorf("webview captcha returned empty result")

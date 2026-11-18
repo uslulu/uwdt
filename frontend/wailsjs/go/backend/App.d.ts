@@ -4,6 +4,8 @@ import {backend} from '../models';
 
 export function ASNames(arg1:Array<string>):Promise<Record<string, string>>;
 
+export function CancelPings():Promise<void>;
+
 export function CheckExclude(arg1:string):Promise<string>;
 
 export function CheckUpdate():Promise<backend.UpdateInfo>;
@@ -12,13 +14,17 @@ export function Connect(arg1:backend.ConnectParams):Promise<void>;
 
 export function ConnectXray(arg1:string,arg2:string):Promise<void>;
 
+export function CreateProfile(arg1:string,arg2:backend.ProfileData):Promise<void>;
+
 export function DeleteProfile(arg1:string):Promise<void>;
 
 export function Disconnect():Promise<void>;
 
+export function EditProfile(arg1:string,arg2:string,arg3:backend.ProfileData):Promise<void>;
+
 export function FetchSubscription(arg1:string):Promise<backend.Subscription>;
 
-export function GenerateReport(arg1:Array<backend.LogEntry>):Promise<string>;
+export function GenerateReport():Promise<string>;
 
 export function GetAutoStart():Promise<boolean>;
 
@@ -34,13 +40,23 @@ export function GetRussiaDirect():Promise<backend.RussiaInfo>;
 
 export function GetVersion():Promise<string>;
 
+export function InspectAddress(arg1:string):Promise<Array<backend.AddressRoute>>;
+
 export function InstallUpdate():Promise<void>;
 
 export function IsRunning():Promise<boolean>;
 
 export function ListProfiles():Promise<Record<string, backend.ProfileData>>;
 
+export function LoadCatalog():Promise<string>;
+
 export function PingServers(arg1:Array<string>):Promise<Record<string, number>>;
+
+export function RetryRules():Promise<void>;
+
+export function RuleStatus():Promise<string>;
+
+export function SaveCatalog(arg1:string):Promise<void>;
 
 export function SaveLogs():Promise<string>;
 

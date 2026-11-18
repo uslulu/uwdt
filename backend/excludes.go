@@ -23,6 +23,7 @@ import (
 
 // ExcludeEntry — одна строка списка исключений.
 type ExcludeEntry struct {
+	Source  string `json:"source,omitempty"`
 	Value   string `json:"value"`   // 10.0.0.0/8, 1.2.3.4 или meet.example.ru
 	Enabled bool   `json:"enabled"` // выключенная строка хранится, но не применяется
 }
@@ -97,11 +98,12 @@ func ValidateExcludes(entries []ExcludeEntry) ([]ExcludeEntry, error) {
 			}
 			continue
 		}
-		if seen[v] {
+		key := e.Source + "\x00" + v
+		if seen[key] {
 			continue
 		}
-		seen[v] = true
-		out = append(out, ExcludeEntry{Value: v, Enabled: e.Enabled})
+		seen[key] = true
+		out = append(out, ExcludeEntry{Source: e.Source, Value: v, Enabled: e.Enabled})
 	}
 	return out, firstErr
 }
@@ -111,6 +113,12 @@ func ValidateExcludes(entries []ExcludeEntry) ([]ExcludeEntry, error) {
 // медленный DNS не задерживал туннель); fast=false — свежий запрос, домены
 // параллельно и с запасными DNS-серверами.
 func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc, fast bool) []string {
+	nets, _ := resolvedRules(context.Background(), entries, logf, fast)
+	return nets
+}
+func resolvedRules(ctx context.Context, entries []ExcludeEntry, logf wgLogFunc, fast bool) ([]string, []string) {
+	var missing []string
+	seen := map[string]bool{}
 	set := map[string]bool{}
 	var domains []string
 	for _, e := range entries {
@@ -121,6 +129,10 @@ func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc, fast bool) []string
 		if err != nil {
 			continue
 		}
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
 		switch kind {
 		case "cidr":
 			set[v] = true
@@ -129,7 +141,10 @@ func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc, fast bool) []string
 			if fast {
 				nets = asnNetsCached(v)
 			} else {
-				nets = asnNets(v, logf)
+				nets = asnNets(ctx, v, logf)
+			}
+			if len(nets) == 0 {
+				missing = append(missing, v)
 			}
 			for _, c := range nets {
 				set[c] = true
@@ -138,7 +153,12 @@ func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc, fast bool) []string
 			domains = append(domains, v)
 		}
 	}
-	for _, ips := range resolveDomains(domains, logf, fast) {
+	resolved := resolveDomains(ctx, domains, logf, fast)
+	for _, domain := range domains {
+		ips := resolved[domain]
+		if len(ips) == 0 {
+			missing = append(missing, domain)
+		}
 		for _, ip := range ips {
 			set[ip+"/32"] = true
 		}
@@ -148,7 +168,7 @@ func resolveExcludes(entries []ExcludeEntry, logf wgLogFunc, fast bool) []string
 		out = append(out, c)
 	}
 	sort.Strings(out)
-	return out
+	return out, missing
 }
 
 // ── домены: кэш последних адресов + параллельный резолв с запасными DNS ──
@@ -208,8 +228,8 @@ func lookupIPv4(ctx context.Context, r *net.Resolver, host string) []string {
 }
 
 // lookupDomain: системный DNS (у Cisco бывает медленным), затем запасные серверы напрямую.
-func lookupDomain(host string) []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+func lookupDomain(parent context.Context, host string) []string {
+	ctx, cancel := context.WithTimeout(parent, 2500*time.Millisecond)
 	ips := lookupIPv4(ctx, net.DefaultResolver, host)
 	cancel()
 	if len(ips) > 0 {
@@ -221,7 +241,7 @@ func lookupDomain(host string) []string {
 			d := net.Dialer{Timeout: 2 * time.Second}
 			return d.DialContext(ctx, "udp", ns)
 		}}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		ips = lookupIPv4(ctx, r, host)
 		cancel()
 		if len(ips) > 0 {
@@ -246,7 +266,7 @@ func mergeIPs(fresh, old []string, max int) []string {
 	return out
 }
 
-func resolveDomains(domains []string, logf wgLogFunc, fast bool) map[string][]string {
+func resolveDomains(ctx context.Context, domains []string, logf wgLogFunc, fast bool) map[string][]string {
 	out := map[string][]string{}
 	if len(domains) == 0 {
 		return out
@@ -273,7 +293,10 @@ func resolveDomains(domains []string, logf wgLogFunc, fast bool) map[string][]st
 		wg.Add(1)
 		go func(d string) {
 			defer wg.Done()
-			ips := lookupDomain(d)
+			ips := lookupDomain(ctx, d)
+			if ctx.Err() != nil {
+				return
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if len(ips) == 0 {
@@ -291,6 +314,10 @@ func resolveDomains(domains []string, logf wgLogFunc, fast bool) map[string][]st
 	wg.Wait()
 
 	dnsCacheMu.Lock()
+	if ctx.Err() != nil {
+		dnsCacheMu.Unlock()
+		return nil
+	}
 	changed := false
 	for d, ips := range out {
 		if strings.Join(dnsCache[d], ",") != strings.Join(ips, ",") {
@@ -319,19 +346,14 @@ func SetExcludeSource(f func() []ExcludeEntry) {
 	excludeSourceMu.Unlock()
 }
 
-func currentUserExcludes(logf wgLogFunc) []string { return userExcludes(logf, false) }
-
-// currentUserExcludesFast — без сети, из кэша: для момента подключения.
-func currentUserExcludesFast(logf wgLogFunc) []string { return userExcludes(logf, true) }
-
-func userExcludes(logf wgLogFunc, fast bool) []string {
+func ruleEntries() []ExcludeEntry {
 	excludeSourceMu.Lock()
 	f := excludeSource
 	excludeSourceMu.Unlock()
 	if f == nil {
 		return nil
 	}
-	return resolveExcludes(f(), logf, fast)
+	return f()
 }
 
 // «Россия напрямую» — флаг из настроек (задаётся App при старте)
@@ -353,16 +375,14 @@ func russiaDirectEnabled() bool {
 	return f != nil && f()
 }
 
-// currentAllExcludes — пользовательский список плюс российские сети, если включено.
-func currentAllExcludes(logf wgLogFunc) []string { return allExcludes(logf, false) }
-
-// currentAllExcludesFast — то же без обращения к сети (кэш): для момента подключения.
-func currentAllExcludesFast(logf wgLogFunc) []string { return allExcludes(logf, true) }
-
-func allExcludes(logf wgLogFunc, fast bool) []string {
-	list := userExcludes(logf, fast)
+func currentAllExcludesFast(logf wgLogFunc) []string {
+	nets, _ := allExcludes(context.Background(), logf, true)
+	return nets
+}
+func allExcludes(ctx context.Context, logf wgLogFunc, fast bool) ([]string, []string) {
+	list, missing := resolvedRules(ctx, ruleEntries(), logf, fast)
 	if !russiaDirectEnabled() {
-		return list
+		return list, missing
 	}
 	seen := make(map[string]bool, len(list))
 	for _, c := range list {
@@ -373,7 +393,7 @@ func allExcludes(logf wgLogFunc, fast bool) []string {
 			list = append(list, c)
 		}
 	}
-	return list
+	return list, missing
 }
 
 // diffCIDRs возвращает, что добавить и что убрать, чтобы из old получить new.
@@ -407,7 +427,7 @@ func DiffCIDRs(old, new []string) (add, del []string) { return diffCIDRs(old, ne
 // не проходит, а без повтора сети AS шли бы через туннель до планового обновления
 var excludeEarlyRetries = []time.Duration{20 * time.Second, 70 * time.Second}
 
-func (w *WG) excludeRefreshLoop(stop chan struct{}, logf wgLogFunc) {
+func excludeRefreshLoop(stop <-chan struct{}, refresh func()) {
 	t := time.NewTicker(excludeRefreshInterval)
 	defer t.Stop()
 	early := excludeEarlyRetries
@@ -417,14 +437,14 @@ func (w *WG) excludeRefreshLoop(stop chan struct{}, logf wgLogFunc) {
 		case <-stop:
 			return
 		case <-retry:
-			w.RefreshExcludes(logf)
+			refresh()
 			if early = early[1:]; len(early) > 0 {
 				retry = time.After(early[0])
 			} else {
 				retry = nil
 			}
 		case <-t.C:
-			w.RefreshExcludes(logf)
+			refresh()
 		}
 	}
 }

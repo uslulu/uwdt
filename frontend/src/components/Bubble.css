@@ -1,7 +1,7 @@
-.bubble { display: block; overflow: visible; transition: filter 0.6s ease; }
+.bubble { display: block; overflow: visible; transition: filter 0.5s var(--ease); }
 
 /* Уровень воды: transform у группы задаёт высоту поверхности */
-.bubble-level { transition: transform 1.2s cubic-bezier(.4,0,.2,1); transform: translateY(150px); }
+.bubble-level { transition: transform 1.2s var(--ease); transform: translateY(150px); }
 .bubble--connected .bubble-level, .bubble--logo .bubble-level { transform: translateY(108px); }
 .bubble--disconnecting .bubble-level { transform: translateY(150px); }
 .bubble--connecting .bubble-level { animation: bubble-fill 2.4s ease-in-out infinite; }
@@ -11,7 +11,7 @@
 .bubble--idle .bubble-wave, .bubble--logo .bubble-wave { animation-play-state: paused; }
 .bubble--idle .bubble-level { opacity: 0.4; }
 
-.bubble-icon { width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; color: var(--accent); transition: color 0.6s ease; }
+.bubble-icon { width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; color: var(--accent); transition: color 0.5s var(--ease); }
 .bubble--connected .bubble-icon, .bubble--disconnecting .bubble-icon { color: #ffffff; }
 .bubble-shine { opacity: 0.75; }
 

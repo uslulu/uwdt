@@ -170,7 +170,7 @@ func WorkerGroup(
 				if tp.Host != "" {
 					host = tp.Host
 				}
-				resolved, err := net.LookupIP(host)
+				resolved, err := turnResolver.LookupIP(ctx, "ip", host)
 				if err != nil {
 					turnIPs = append(turnIPs, host)
 				} else {

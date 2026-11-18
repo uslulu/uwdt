@@ -11,22 +11,11 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-var aeadCache sync.Map
-
 func getAEAD(key []byte) (cipher.AEAD, error) {
 	if len(key) != wrapKeyLen {
 		return nil, fmt.Errorf("obfs: key must be %d bytes", wrapKeyLen)
 	}
-	keyStr := string(key)
-	if val, ok := aeadCache.Load(keyStr); ok {
-		return val.(cipher.AEAD), nil
-	}
-	aead, err := chacha20poly1305.New(key)
-	if err != nil {
-		return nil, err
-	}
-	aeadCache.Store(keyStr, aead)
-	return aead, nil
+	return chacha20poly1305.New(key)
 }
 
 type ObfsConfig struct {
@@ -83,6 +72,14 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	if len(key) != wrapKeyLen {
 		return nil, fmt.Errorf("obfs: key must be %d bytes (got %d)", wrapKeyLen, len(key))
 	}
+	aead, err := getAEAD(key)
+	if err != nil {
+		return nil, fmt.Errorf("obfs: cipher init: %w", err)
+	}
+	return obfsSealPacket(aead, payload, cfg, state, nil)
+}
+
+func obfsSealPacket(aead cipher.AEAD, payload []byte, cfg *ObfsConfig, state *ObfsState, buffer []byte) ([]byte, error) {
 	if len(payload) == 0 {
 		return nil, errors.New("obfs: empty payload")
 	}
@@ -106,7 +103,10 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	padTotal := padRand + 1
 
 	outLen := 12 + len(payload) + chacha20poly1305.Overhead + padTotal
-	out := make([]byte, outLen)
+	if cap(buffer) < outLen {
+		buffer = make([]byte, outLen)
+	}
+	out := buffer[:outLen]
 
 	out[0] = 0x80 | 0x20
 	out[1] = cfg.PayloadType & 0x7F
@@ -114,10 +114,6 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	binary.BigEndian.PutUint32(out[4:8], ts)
 	binary.BigEndian.PutUint32(out[8:12], cfg.SSRC)
 
-	aead, err := getAEAD(key)
-	if err != nil {
-		return nil, fmt.Errorf("obfs: cipher init: %w", err)
-	}
 	sealed := aead.Seal(out[12:12], nonce, payload, out[:12])
 
 	padStart := 12 + len(sealed)
@@ -134,6 +130,14 @@ func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	if len(key) != wrapKeyLen {
 		return 0, fmt.Errorf("obfs: key must be %d bytes (got %d)", wrapKeyLen, len(key))
 	}
+	aead, err := getAEAD(key)
+	if err != nil {
+		return 0, fmt.Errorf("obfs: cipher init: %w", err)
+	}
+	return obfsOpenPacket(aead, wire, dst)
+}
+
+func obfsOpenPacket(aead cipher.AEAD, wire, dst []byte) (int, error) {
 	if len(wire) < 13 {
 		return 0, errors.New("obfs: packet too short")
 	}
@@ -164,10 +168,6 @@ func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	}
 
 	nonce := obfsBuildNonce(ssrc, seq, ts)
-	aead, err := getAEAD(key)
-	if err != nil {
-		return 0, fmt.Errorf("obfs: cipher init: %w", err)
-	}
 	plain, err := aead.Open(dst[:0], nonce, wire[12:payloadEnd], wire[:12])
 	if err != nil {
 		return 0, fmt.Errorf("obfs: auth: %w", err)

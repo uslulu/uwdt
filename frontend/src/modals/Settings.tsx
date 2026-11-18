@@ -3,10 +3,10 @@ import { IconSettings2, IconX, IconHeartFilled, IconBug, IconAlertTriangle, Icon
 import { settingsStore } from '../lib/store';
 import type { AppSettings } from '../lib/types';
 import { SetAutoStart, GetAutoStart, GetVersion, GenerateReport, GetObfsAccepted, SetObfsAccepted, SetObfsMode, GetExcludes, GetRussiaDirect } from '../../wailsjs/go/backend/App';
+import { directCount } from '../lib/presets';
 import Excludes from './Excludes';
 import './Excludes.css';
 import { BrowserOpenURL } from '../../wailsjs/runtime/runtime';
-import { logStore } from '../lib/stores/logStore';
 import { toastStore } from '../lib/stores/toastStore';
 import './Settings.css';
 
@@ -24,7 +24,7 @@ export default function Settings({ onClose }: Props) {
   const [excludeCount, setExcludeCount] = useState(0);
   const [russiaOn, setRussiaOn] = useState(false);
   const loadExcludeSummary = () => {
-    GetExcludes().then(l => setExcludeCount((l ?? []).filter(e => e.enabled).length)).catch(() => {});
+    GetExcludes().then(l => setExcludeCount(directCount(l ?? []))).catch(() => {});
     GetRussiaDirect().then(r => setRussiaOn(!!r?.enabled)).catch(() => {});
   };
 
@@ -53,13 +53,7 @@ export default function Settings({ onClose }: Props) {
   }, []);
 
   const handleReport = async () => {
-    const logs = logStore.getAll();
-    const report = await GenerateReport(logs.map(e => ({
-      level: e.level,
-      message: e.message,
-      time: e.time,
-      count: e.count,
-    })));
+    const report = await GenerateReport();
     const mode = settings.obfsMode || 'audio';
     const accepted = settings.obfsAccepted ? 'да' : 'нет';
     const transport = settings.turnTcp ? 'TCP' : 'UDP';
@@ -89,7 +83,7 @@ export default function Settings({ onClose }: Props) {
       update('obfsAccepted', true);
       update('obfsMode', pendingObfsMode);
       setShowObfsModal(false);
-    } catch (e) {
+    } catch {
       toastStore.show('Не удалось сохранить настройки', 3000);
     }
   };
@@ -108,8 +102,7 @@ export default function Settings({ onClose }: Props) {
             <span>Запускать при старте</span>
             <button type="button" className={`st-toggle st-toggle--${settings.autoStart ? 'on' : 'off'}`} aria-label={settings.autoStart ? 'Отключить автозапуск' : 'Включить автозапуск'} onClick={() => {
               const next = !settings.autoStart;
-              update('autoStart', next);
-              SetAutoStart(next);
+              SetAutoStart(next).then(() => update('autoStart',next)).catch(e => toastStore.show(String(e),3000));
             }} />
           </div>
 
@@ -129,10 +122,10 @@ export default function Settings({ onClose }: Props) {
             </div>
           </div>
 
-          <div className="st-row st-row--link" onClick={() => setShowExcludes(true)}>
-            <span>Исключения из туннеля</span>
+          <button type="button" className="st-row st-row--link" onClick={() => setShowExcludes(true)}>
+            <span>Что идёт напрямую</span>
             <span className="st-row-value">{[russiaOn ? 'Россия' : '', excludeCount > 0 ? String(excludeCount) : ''].filter(Boolean).join(' + ') || 'нет'}<IconChevronRight size={16} /></span>
-          </div>
+          </button>
 
           <div className="st-info">
             <div className="st-info-name">UWDT</div>

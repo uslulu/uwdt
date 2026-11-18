@@ -62,28 +62,64 @@ func validExcludeNet(c string) (string, bool) {
 // russiaNets — актуальный список: кэш с диска, если он есть и цел, иначе вшитый снимок.
 // Если кэш старше недели — в фоне запускается обновление.
 func russiaNets(logf wgLogFunc) []string {
+	nets, stale := russiaSnapshot()
+	if stale {
+		go refreshRussiaNets(logf)
+	}
+	return nets
+}
+
+var parsedRU struct {
+	path  string
+	stamp time.Time
+	size  int64
+	nets  []string
+	date  string
+}
+
+func russiaSnapshot() ([]string, bool) {
 	ruNetsMu.Lock()
 	defer ruNetsMu.Unlock()
 	path := ruNetsCachePath()
-	if data, err := os.ReadFile(path); err == nil {
-		if nets := parseNetList(string(data)); len(nets) >= ruNetsMinEntries {
-			if st, err := os.Stat(path); err == nil && time.Since(st.ModTime()) > ruNetsMaxAge {
-				go refreshRussiaNets(logf)
-			}
-			return nets
-		}
+	st, err := os.Stat(path)
+	var stamp time.Time
+	var size int64
+	if err == nil {
+		stamp, size = st.ModTime(), st.Size()
 	}
-	go refreshRussiaNets(logf)
-	return parseNetList(embeddedRuNets)
+	if path != parsedRU.path || !stamp.Equal(parsedRU.stamp) || size != parsedRU.size {
+		text := embeddedRuNets
+		var nets []string
+		if size > 0 {
+			if data, err := os.ReadFile(path); err == nil {
+				nets = parseNetList(string(data))
+				if len(nets) >= ruNetsMinEntries {
+					text = string(data)
+				} else {
+					nets = nil
+				}
+			}
+		}
+		if nets == nil {
+			nets = parseNetList(text)
+		}
+		parsedRU.path, parsedRU.stamp, parsedRU.size, parsedRU.nets, parsedRU.date = path, stamp, size, nets, netListDate(text)
+	}
+	return parsedRU.nets, time.Since(stamp) > ruNetsMaxAge
 }
 
 var ruRefreshOnce sync.Mutex
+var lastRussiaAttempt time.Time
 
 func refreshRussiaNets(logf wgLogFunc) {
 	if !ruRefreshOnce.TryLock() {
 		return
 	}
 	defer ruRefreshOnce.Unlock()
+	if time.Since(lastRussiaAttempt) < time.Hour {
+		return
+	}
+	lastRussiaAttempt = time.Now()
 	nets, err := fetchRussiaNets()
 	if err != nil {
 		if logf != nil {
@@ -175,10 +211,12 @@ func aggregateNets(prefixes []string) []string {
 
 // russiaNetsDate — дата актуального списка из его заголовка ("# RIPE ..., 2026-10-07, ...").
 func russiaNetsDate() string {
-	text := embeddedRuNets
-	if data, err := os.ReadFile(ruNetsCachePath()); err == nil && len(parseNetList(string(data))) >= ruNetsMinEntries {
-		text = string(data)
-	}
+	russiaSnapshot()
+	ruNetsMu.Lock()
+	defer ruNetsMu.Unlock()
+	return parsedRU.date
+}
+func netListDate(text string) string {
 	first, _, _ := strings.Cut(text, "\n")
 	parts := strings.Split(first, ",")
 	if len(parts) >= 2 {

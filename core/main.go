@@ -38,8 +38,8 @@ type Event struct {
 	Message string
 
 	// event
-	Name   string   // "wg_config", "captcha_required", "ready"
-	Data   string   // JSON строка
+	Name    string   // "wg_config", "captcha_required", "ready"
+	Data    string   // JSON строка
 	TurnIPs []string // IP-адреса TURN-серверов (для exclude routes)
 
 	// stats
@@ -76,14 +76,17 @@ type Core struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	pauseFlag         int32
+	captchaMu         sync.Mutex
 	CaptchaResultChan chan string
 	captchaMode       atomic.Value
 	vkAuthMode        atomic.Value
+	eventMu           sync.RWMutex
+	eventsClosed      bool
 	events            chan Event
-	allocateGate *allocationGate
-	startOnce    sync.Once // guard от двойного Start()
-	startErr     atomic.Value // *startFailure — ошибка первого Start(), если он провалился
-	once         sync.Once // guard от двойного Stop()
+	allocateGate      *allocationGate
+	startOnce         sync.Once    // guard от двойного Start()
+	startErr          atomic.Value // *startFailure — ошибка первого Start(), если он провалился
+	once              sync.Once    // guard от двойного Stop()
 }
 
 // startFailure — обёртка для atomic.Value (чтобы разные error-типы не паниковали).
@@ -92,14 +95,22 @@ type startFailure struct{ err error }
 // activeCore — текущий запущенный экземпляр ядра.
 // Нужен для доступа из session.go, vk_auth.go и др. файлов.
 var (
-	activeCore     *Core
-	activeCoreMu   sync.RWMutex
+	activeCore   *Core
+	activeCoreMu sync.RWMutex
 )
 
 func setActiveCore(c *Core) {
 	activeCoreMu.Lock()
 	activeCore = c
 	activeCoreMu.Unlock()
+}
+
+func releaseActiveCore(c *Core) {
+	activeCoreMu.Lock()
+	defer activeCoreMu.Unlock()
+	if activeCore == c {
+		activeCore = nil
+	}
 }
 
 func getActiveCore() *Core {
@@ -165,19 +176,15 @@ func (c *Core) start() error {
 	startFailed := true
 	defer func() {
 		if startFailed {
+			releaseActiveCore(c)
 			log.SetOutput(os.Stderr)
 		}
 	}()
-
-	setupGlobalResolver()
 
 	// Все log.Printf → в канал событий (с фильтрацией)
 	// Без таймстемпа — UI добавляет своё время
 	log.SetFlags(0)
 	log.SetOutput(&logWriter{core: c})
-
-	// Подменяем глобальный CaptchaResultChan на канал из Core
-	CaptchaResultChan = c.CaptchaResultChan
 
 	// Устанавливаем activeCore для доступа из session/vk_auth
 	setActiveCore(c)
@@ -320,7 +327,8 @@ func (c *Core) start() error {
 	startFailed = false // дальнейшая уборка логгера — на success-горутине
 
 	go func() {
-		defer close(c.events)
+		defer func() { c.eventMu.Lock(); c.eventsClosed = true; close(c.events); c.eventMu.Unlock() }()
+		defer releaseActiveCore(c)
 		defer log.SetOutput(os.Stderr) // восстанавливаем лог в stderr
 		defer disp.Shutdown()
 		defer cancel()
@@ -397,18 +405,14 @@ func (c *Core) Resume() { atomic.StoreInt32(&c.pauseFlag, 0) }
 // SolveCaptcha передаёт токен капчи в ядро.
 // Атомарно: drain старого + запись нового.
 func (c *Core) SolveCaptcha(token string) {
+	c.captchaMu.Lock()
+	defer c.captchaMu.Unlock()
 	// Дренируем устаревший токен
 	select {
 	case <-c.CaptchaResultChan:
 	default:
 	}
-	// Записываем новый (если канал полон — дропаем старый)
-	select {
-	case c.CaptchaResultChan <- token:
-	default:
-		<-c.CaptchaResultChan
-		c.CaptchaResultChan <- token
-	}
+	c.CaptchaResultChan <- token
 }
 
 // ═══════════════════════════════════════════════════
@@ -416,20 +420,26 @@ func (c *Core) SolveCaptcha(token string) {
 // ═══════════════════════════════════════════════════
 
 func (c *Core) emit(ev Event) {
-	defer func() { recover() }() // ловим send on closed channel
-	select {
-	case c.events <- ev:
-	default:
-		// Канал полон — дропаем старые логи чтобы освободить место
-		select {
-		case <-c.events:
-		default:
+	c.eventMu.RLock()
+	defer c.eventMu.RUnlock()
+	if c.eventsClosed {
+		return
+	}
+	if ev.Type == EventLog || ev.Type == EventStats {
+		if cap(c.events) > 8 && len(c.events) >= cap(c.events)-8 {
+			return
 		}
 		select {
 		case c.events <- ev:
 		default:
 		}
+		return
 	}
+	select {
+	case c.events <- ev:
+	case <-c.ctx.Done():
+	}
+
 }
 
 func (c *Core) getCaptchaMode() string {
@@ -477,13 +487,6 @@ func normalizeVKAuthMode(mode string) string {
 	}
 }
 
-func drainCaptchaResult() {
-	select {
-	case <-CaptchaResultChan:
-	default:
-	}
-}
-
 // getVKAuthMode возвращает текущий режим VK авторизации.
 func (c *Core) getVKAuthMode() string {
 	mode, _ := c.vkAuthMode.Load().(string)
@@ -521,10 +524,6 @@ func getVKAuthMode() string {
 	}
 	return "vkcalls"
 }
-
-// CaptchaResultChan — глобальный канал для совместимости с vk_auth.go.
-// При Start() подменяется на канал из Core.
-var CaptchaResultChan = make(chan string, 1)
 
 // ═══════════════════════════════════════════════════
 // LOG WRITER — перенаправляет log.Printf в канал событий с фильтрацией

@@ -17,7 +17,11 @@ const (
 )
 
 func (a *App) watchUpdates() {
-	time.Sleep(updateFirstGap)
+	select {
+	case <-a.ctx.Done():
+		return
+	case <-time.After(updateFirstGap):
+	}
 	var last, shownAt time.Time
 	var shown string
 	check := func() {
@@ -28,7 +32,7 @@ func (a *App) watchUpdates() {
 			last = time.Time{} // сеть могла перестраиваться — повторим на следующем тике, а не через час
 			return
 		}
-		if !info.Available {
+		if a.ctx.Err() != nil || !info.Available {
 			return
 		}
 		if info.Version == shown && wallNow().Sub(shownAt) < updateRemind {
@@ -40,7 +44,12 @@ func (a *App) watchUpdates() {
 	check()
 	t := time.NewTicker(updateTick)
 	defer t.Stop()
-	for range t.C {
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-t.C:
+		}
 		if wallNow().Sub(last) >= updateEvery {
 			check()
 		}

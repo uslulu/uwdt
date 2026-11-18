@@ -64,7 +64,7 @@ func captchaBridgeJS(post string) string {
 }
 
 // handleCaptchaRequest вызывается мостом на событие captcha_required.
-func (b *Bridge) handleCaptchaRequest(data string) {
+func (b *Bridge) handleCaptchaRequest(ctx context.Context, session uint64, data string) {
 	var req struct {
 		Mode        string `json:"mode"`
 		RedirectURI string `json:"redirect_uri"`
@@ -80,11 +80,14 @@ func (b *Bridge) handleCaptchaRequest(data string) {
 	b.onEvent("captcha_window", "open")
 	b.onEvent("stage", "Решите капчу в открывшемся окне")
 	b.onEvent("log", "INFO", "[КАПЧА] ВКонтакте просит пройти проверку — решите капчу в открывшемся окне")
-	token, err := runCaptchaWindow(req.RedirectURI)
+	token, err := runCaptchaWindow(ctx, req.RedirectURI)
 	b.onEvent("captcha_window", "closed")
 
 	b.mu.Lock()
 	c := b.core
+	if b.session != session || b.stopping {
+		c = nil
+	}
 	b.mu.Unlock()
 	if c == nil {
 		return
@@ -98,12 +101,12 @@ func (b *Bridge) handleCaptchaRequest(data string) {
 	c.SolveCaptcha(token)
 }
 
-func runCaptchaWindow(pageURL string) (string, error) {
+func runCaptchaWindow(parent context.Context, pageURL string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), captchaWindowTimeout)
+	ctx, cancel := context.WithTimeout(parent, captchaWindowTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, "--captcha-window", pageURL)
 	hideWindow(cmd)

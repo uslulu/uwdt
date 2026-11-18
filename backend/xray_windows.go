@@ -40,11 +40,16 @@ func (w *WG) applyXrayWindows(link string, serverIPs []string, logf wgLogFunc) e
 	}
 	excludes = append(excludes, vkExcludeCIDRs...)
 	user := currentAllExcludesFast(logf)
+	w.builtinWindows = map[string]bool{}
+	for _, c := range excludes {
+		w.builtinWindows[c] = true
+	}
 	all := append(excludes, user...)
-	if _, err := bulkRoutes(true, gw, all); err != nil {
+	if _, err := w.bulkRoutes(true, gw, all); err != nil {
+		_, _ = w.bulkRoutes(false, gw, all)
 		return fmt.Errorf("исключения из туннеля: %w", err)
 	}
-	removeExcludes := func() { _, _ = bulkRoutes(false, gw, all) }
+	removeExcludes := func() { _, _ = w.bulkRoutes(false, gw, all) }
 
 	// Своё имя адаптера на каждый запуск: если прошлый почему-то не закрылся,
 	// Xray не подхватит его по имени (с занятой сессией запуск зависал)
@@ -64,18 +69,22 @@ func (w *WG) applyXrayWindows(link string, serverIPs []string, logf wgLogFunc) e
 		removeExcludes()
 		return fmt.Errorf("адаптер Xray: %w", err)
 	}
-	setTunnelDNSLUID(luid, tunnelDNSDefault, logf)
+	if err := setTunnelDNSLUID(luid, tunnelDNSDefault, logf); err != nil {
+		clearTunnelDNSWindows()
+		x.Close()
+		removeExcludes()
+		return err
+	}
 
 	w.activeXray = x
-	w.xrayMode = true
 	w.physGW = gw
-	w.activeExcludeRoutes = all
 	w.activeUserExcludes = user
 	w.refreshStop = make(chan struct{})
-	go w.excludeRefreshLoop(w.refreshStop, logf)
+	stop := w.refreshStop
+	go excludeRefreshLoop(stop, func() { w.refreshWindowsSession(logf, stop) })
 
 	logf(fmt.Sprintf("Туннель %s (Xray) поднят", name))
-	go w.RefreshExcludes(logf)
+	go w.refreshWindowsSession(logf, stop)
 	return nil
 }
 
@@ -103,7 +112,11 @@ func configureXrayAdapter(luid winipcfg.LUID) error {
 		row.UseAutomaticMetric = false
 		row.Metric = 1
 		row.NLMTU = xrayMTU
-		_ = row.Set()
+		if err := row.Set(); err != nil {
+			return err
+		}
+	} else {
+		return err
 	}
 	for _, p := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
 		if err := luid.AddRoute(netip.MustParsePrefix(p), netip.IPv4Unspecified(), 0); err != nil &&

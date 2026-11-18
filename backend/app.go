@@ -6,14 +6,19 @@ import (
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const Version = "1.9.2"
+const Version = "1.9.9"
+
+// localTestVersion is set by the linker for standalone local test builds.
+var localTestVersion string
 
 // App — главный объект приложения.
 // Wails привязывает его методы к frontend через Bind().
 type App struct {
-	ctx    context.Context
-	bridge *Bridge
-	store  *Store
+	cancelBackground context.CancelFunc
+	pings            pingPool
+	ctx              context.Context
+	bridge           *Bridge
+	store            *Store
 }
 
 // NewApp создаёт App. Вызывается из main() до wails.Run().
@@ -29,29 +34,30 @@ func NewApp() *App {
 
 // Startup вызывается Wails после создания webview.
 func (a *App) Startup(ctx context.Context) {
-	a.ctx = ctx
+	a.ctx, a.cancelBackground = context.WithCancel(ctx)
 
 	settings := a.store.LoadSettings()
 	a.bridge = NewBridge(ctx, a.store, a.onBridgeEvent)
 	SetExcludeSource(func() []ExcludeEntry { return a.store.LoadSettings().Excludes })
 	SetRussiaDirectSource(func() bool { return a.store.LoadSettings().RussiaDirect })
 
-	if settings.AutoStart {
-		a.SetAutoStart(true)
+	if localTestVersion == "" {
+		if settings.AutoStart {
+			a.SetAutoStart(true)
+		}
+		go cleanupLegacyWindowsAutostart()
+		go cleanupOldUpdate()
+		go a.watchUpdates()
 	}
-	go cleanupLegacyWindowsAutostart()
 
-	go cleanupOldUpdate()
-	go a.watchUpdates()
-
-	// Уборка маршрутов, оставшихся от краша прошлого запуска
-	go CleanupStaleExcludeRoutes(func(msg string) {
-		a.onBridgeEvent("log", "INFO", "[WG] "+msg)
-	})
 }
 
 // Shutdown вызывается Wails при закрытии приложения.
 func (a *App) Shutdown(ctx context.Context) {
+	if a.cancelBackground != nil {
+		a.cancelBackground()
+	}
+	a.pings.stop()
 	if a.bridge != nil {
 		a.bridge.Disconnect()
 	}
@@ -65,8 +71,8 @@ func (a *App) Connect(params ConnectParams) error {
 	return a.bridge.Connect(params)
 }
 
-func (a *App) Disconnect() {
-	a.bridge.Disconnect()
+func (a *App) Disconnect() error {
+	return a.bridge.Disconnect()
 }
 
 func (a *App) IsRunning() bool {
@@ -74,6 +80,9 @@ func (a *App) IsRunning() bool {
 }
 
 func (a *App) GetVersion() string {
+	if localTestVersion != "" {
+		return localTestVersion
+	}
 	return Version
 }
 
@@ -88,13 +97,20 @@ func (a *App) GetProfile(name string) (*ProfileData, error) {
 func (a *App) SaveProfile(name string, p ProfileData) error {
 	return a.store.SaveProfile(name, p)
 }
+func (a *App) CreateProfile(name string, p ProfileData) error {
+	return a.store.changeProfile("", name, p, true)
+}
+
+func (a *App) EditProfile(previous, name string, p ProfileData) error {
+	return a.store.writeProfile(previous, name, p)
+}
 
 func (a *App) DeleteProfile(name string) error {
 	return a.store.DeleteProfile(name)
 }
 
-func (a *App) ListProfiles() map[string]ProfileData {
-	return a.store.ListProfiles()
+func (a *App) ListProfiles() (map[string]ProfileData, error) {
+	return a.store.listProfiles()
 }
 
 // ═══════════════════════════════════════════════════
@@ -106,10 +122,13 @@ func (a *App) GetAutoStart() bool {
 }
 
 func (a *App) SetAutoStart(v bool) error {
-	settings := a.store.LoadSettings()
-	settings.AutoStart = v
-	a.store.SaveSettings(settings)
-	return setAutoStart(v)
+	if err := setAutoStart(v); err != nil {
+		return err
+	}
+	if err := a.store.updateSettings(func(s *AppSettings) { s.AutoStart = v }); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *App) GetObfsMode() string {
@@ -117,9 +136,7 @@ func (a *App) GetObfsMode() string {
 }
 
 func (a *App) SetObfsMode(mode string) error {
-	settings := a.store.LoadSettings()
-	settings.ObfsMode = mode
-	return a.store.SaveSettings(settings)
+	return a.store.updateSettings(func(s *AppSettings) { s.ObfsMode = mode })
 }
 
 func (a *App) GetObfsAccepted() bool {
@@ -127,14 +144,27 @@ func (a *App) GetObfsAccepted() bool {
 }
 
 func (a *App) SetObfsAccepted(v bool) error {
-	settings := a.store.LoadSettings()
-	settings.ObfsAccepted = v
-	return a.store.SaveSettings(settings)
+	return a.store.updateSettings(func(s *AppSettings) { s.ObfsAccepted = v })
 }
 
 // ═══════════════════════════════════════════════════
 // EXCLUDES — что идёт мимо туннеля
 // ═══════════════════════════════════════════════════
+
+func (a *App) RuleStatus() string {
+	if !wg.helperAlive() {
+		return "Ошибка применения: helper завершился, переподключите UWDT"
+	}
+	wg.ruleMu.Lock()
+	defer wg.ruleMu.Unlock()
+	if wg.ruleStatus != "" {
+		return wg.ruleStatus
+	}
+	return "При следующем подключении"
+}
+func (a *App) RetryRules() {
+	wg.RefreshExcludes(func(msg string) { a.onBridgeEvent("log", "INFO", msg) })
+}
 
 func (a *App) GetExcludes() []ExcludeEntry {
 	ex := a.store.LoadSettings().Excludes
@@ -150,12 +180,10 @@ func (a *App) SetExcludes(entries []ExcludeEntry) ([]ExcludeEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	settings := a.store.LoadSettings()
-	settings.Excludes = clean
-	if err := a.store.SaveSettings(settings); err != nil {
+	if err := a.store.updateSettings(func(s *AppSettings) { s.Excludes = clean }); err != nil {
 		return nil, err
 	}
-	go wg.RefreshExcludes(func(msg string) { a.onBridgeEvent("log", "INFO", "[WG] "+msg) })
+	go wg.refreshTask(func(msg string) { a.onBridgeEvent("log", "INFO", "[WG] "+msg) })()
 	if clean == nil {
 		clean = []ExcludeEntry{}
 	}
@@ -171,18 +199,17 @@ type RussiaInfo struct {
 
 func (a *App) GetRussiaDirect() RussiaInfo {
 	info := RussiaInfo{Enabled: a.store.LoadSettings().RussiaDirect}
-	info.Count = len(russiaNets(nil))
+	nets, _ := russiaSnapshot()
+	info.Count = len(nets)
 	info.Updated = russiaNetsDate()
 	return info
 }
 
 func (a *App) SetRussiaDirect(v bool) (RussiaInfo, error) {
-	settings := a.store.LoadSettings()
-	settings.RussiaDirect = v
-	if err := a.store.SaveSettings(settings); err != nil {
+	if err := a.store.updateSettings(func(s *AppSettings) { s.RussiaDirect = v }); err != nil {
 		return RussiaInfo{}, err
 	}
-	go wg.RefreshExcludes(func(msg string) { a.onBridgeEvent("log", "INFO", "[WG] "+msg) })
+	go wg.refreshTask(func(msg string) { a.onBridgeEvent("log", "INFO", "[WG] "+msg) })()
 	return a.GetRussiaDirect(), nil
 }
 
@@ -193,8 +220,10 @@ func (a *App) FetchSubscription(url string) (*Subscription, error) {
 
 // PingServers — задержка до серверов подписки в мс (-1 — не ответил).
 func (a *App) PingServers(links []string) map[string]int {
-	return PingXray(links)
+	return a.pings.run(a.ctx, links)
 }
+
+func (a *App) CancelPings() { a.pings.stop() }
 
 // ConnectXray подключает к серверу из подписки (ссылка vless://).
 func (a *App) ConnectXray(link, name string) error {

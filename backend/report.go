@@ -7,18 +7,10 @@ import (
 	"strings"
 )
 
-// LogEntry — структура лога (аналог LogEntry из frontend).
-type LogEntry struct {
-	Level   string `json:"level"`
-	Message string `json:"message"`
-	Time    string `json:"time"`
-	Count   int    `json:"count"`
-}
-
 // GenerateReport собирает отчёт:
 // - Информация об устройстве
 // - Полные логи из файла (все строки)
-func (a *App) GenerateReport(_ []LogEntry) string {
+func (a *App) GenerateReport() string {
 	var sb strings.Builder
 
 	sb.WriteString("=== UWDT Bug Report ===\n\n")
@@ -38,6 +30,7 @@ func (a *App) GenerateReport(_ []LogEntry) string {
 
 	// === Полные логи из файла ===
 	sb.WriteString("## Logs\n")
+	_ = a.bridge.flushLog()
 	logContent := a.store.ReadLatestLog()
 	if logContent == "" {
 		sb.WriteString("(no logs)\n")

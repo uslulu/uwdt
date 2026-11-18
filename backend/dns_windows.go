@@ -8,6 +8,7 @@ package backend
 // ответ — от провайдера.
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
 
@@ -19,19 +20,19 @@ import (
 const nrptComment = "UWDT"
 
 func powershell(script string) error {
-	return runCmdWindows("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	return runCmdWindows("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference='Stop'; "+script)
 }
 
-func setTunnelDNSWindows(dev tun.Device, servers []string, logf wgLogFunc) {
+func setTunnelDNSWindows(dev tun.Device, servers []string, logf wgLogFunc) error {
 	nt, ok := dev.(*tun.NativeTun)
 	if !ok {
-		return
+		return fmt.Errorf("адаптер Wintun недоступен")
 	}
-	setTunnelDNSLUID(winipcfg.LUID(nt.LUID()), servers, logf)
+	return setTunnelDNSLUID(winipcfg.LUID(nt.LUID()), servers, logf)
 }
 
 // setTunnelDNSLUID — то же для любого адаптера по LUID (в режиме Xray адаптер создаёт сам Xray).
-func setTunnelDNSLUID(luid winipcfg.LUID, servers []string, logf wgLogFunc) {
+func setTunnelDNSLUID(luid winipcfg.LUID, servers []string, logf wgLogFunc) error {
 
 	var addrs []netip.Addr
 	quoted := make([]string, 0, len(servers))
@@ -42,7 +43,7 @@ func setTunnelDNSLUID(luid winipcfg.LUID, servers []string, logf wgLogFunc) {
 		}
 	}
 	if err := luid.SetDNS(windows.AF_INET, addrs, nil); err != nil {
-		logf("DNS на интерфейсе туннеля: " + err.Error())
+		return fmt.Errorf("%s%w", "DNS на интерфейсе туннеля: ", err)
 	}
 	// Сервер может прислать DNS из встроенных исключений (1.1.1.1 ∈ 1.1.1.0/24):
 	// тогда запросы шли бы мимо туннеля, а провайдер подменял бы ответы.
@@ -50,14 +51,16 @@ func setTunnelDNSLUID(luid winipcfg.LUID, servers []string, logf wgLogFunc) {
 	for _, a := range addrs {
 		if err := luid.AddRoute(netip.PrefixFrom(a, 32), netip.IPv4Unspecified(), 0); err != nil &&
 			err != windows.ERROR_OBJECT_ALREADY_EXISTS {
-			logf("Маршрут DNS " + a.String() + " в туннель: " + err.Error())
+			return fmt.Errorf("%s%w", "Маршрут DNS "+a.String()+" в туннель: ", err)
 		}
 	}
 
-	clearNRPT()
+	if err := clearNRPT(); err != nil {
+		return err
+	}
 	if err := powershell("Add-DnsClientNrptRule -Namespace '.' -NameServers " + strings.Join(quoted, ",") +
 		" -Comment '" + nrptComment + "'"); err != nil {
-		logf("Правило NRPT для DNS: " + err.Error())
+		return fmt.Errorf("%s%w", "Правило NRPT для DNS: ", err)
 	}
 
 	// IPv6 туннель не везёт: без этих маршрутов сайты с AAAA-записью шли бы
@@ -65,21 +68,24 @@ func setTunnelDNSLUID(luid winipcfg.LUID, servers []string, logf wgLogFunc) {
 	for _, p := range []string{"::/1", "8000::/1"} {
 		if err := luid.AddRoute(netip.MustParsePrefix(p), netip.IPv6Unspecified(), 0); err != nil &&
 			err != windows.ERROR_OBJECT_ALREADY_EXISTS {
-			logf("Блокировка IPv6 мимо туннеля (" + p + "): " + err.Error())
+			return fmt.Errorf("%s%w", "Блокировка IPv6 мимо туннеля ("+p+"): ", err)
 		}
 	}
 
 	_ = runCmdWindows("ipconfig", "/flushdns") // подменённые ответы из кэша
 	logf("DNS через туннель: " + strings.Join(servers, ", "))
+	return nil
 }
 
-func clearNRPT() {
-	_ = powershell("Get-DnsClientNrptRule | Where-Object Comment -eq '" + nrptComment + "' | Remove-DnsClientNrptRule -Force")
+func clearNRPT() error {
+	return powershell("Get-DnsClientNrptRule | Where-Object Comment -eq '" + nrptComment + "' | Remove-DnsClientNrptRule -Force")
 }
 
 // clearTunnelDNSWindows убирает правило NRPT: без туннеля DNS снова системный.
 // Вызывается и при запуске — на случай, если прошлый сеанс оборвался аварийно.
-func clearTunnelDNSWindows() {
-	clearNRPT()
-	_ = runCmdWindows("ipconfig", "/flushdns")
+func clearTunnelDNSWindows() error {
+	if err := clearNRPT(); err != nil {
+		return err
+	}
+	return runCmdWindows("ipconfig", "/flushdns")
 }

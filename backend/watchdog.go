@@ -30,6 +30,11 @@ type sessionHealth struct {
 
 func wallNow() time.Time { return time.Now().Round(0) } // без монотонных часов: они во сне стоят
 
+func (b *Bridge) reportHealth(message string) {
+	b.onEvent("health", message)
+	b.log("[ДИАГНОСТИКА] " + message)
+}
+
 func (b *Bridge) noteStats(active int32) {
 	b.mu.Lock()
 	b.health.active = active
@@ -46,17 +51,22 @@ func (b *Bridge) noteTunnelUp() {
 	b.mu.Unlock()
 }
 
-func (b *Bridge) watchdog(sessID uint64) {
+func (b *Bridge) watchdog(sessID uint64, eventsDone <-chan struct{}) {
 	t := time.NewTicker(watchTick)
 	defer t.Stop()
 	last := wallNow()
-	for range t.C {
+	for {
+		select {
+		case <-eventsDone:
+			return
+		case <-t.C:
+		}
 		now := wallNow()
 		gap := now.Sub(last)
 		last = now
 
 		b.mu.Lock()
-		if b.session != sessID || !b.running {
+		if b.session != sessID || !b.running || b.stopping {
 			b.mu.Unlock()
 			return
 		}
@@ -65,7 +75,20 @@ func (b *Bridge) watchdog(sessID uint64) {
 			// Проснулись: даём сети и каналам время, ядро — с чистого листа
 			h.lastActiveAt = now
 			h.lastResetAt = now
+			up := h.tunnelUp
+			h.active = 0 // статистика до сна больше не подтверждает связь
 			b.mu.Unlock()
+			if up {
+				if err := wg.SetTunnelRoutes(false); err != nil {
+					b.reportHealth("После сна не удалось запросить снятие маршрутов. Переподключите туннель. Ошибка: " + err.Error())
+				} else {
+					b.mu.Lock()
+					h.degraded = true
+					b.mu.Unlock()
+					b.onEvent("degraded", true)
+					b.reportHealth("Восстановление после сна: маршруты IPv4 туннеля сняты. Переподключаю каналы.")
+				}
+			}
 			core.ResetSessionState()
 			// TCP-соединения к TURN за время сна умерли, но выглядят живыми, пока
 			// запись в них не упадёт; трафик тем временем уходит в пустоту
@@ -81,7 +104,7 @@ func (b *Bridge) watchdog(sessID uint64) {
 		switch {
 		case up && !deg && act == 0 && silent > deadAfter:
 			if err := wg.SetTunnelRoutes(false); err != nil {
-				b.log("[СТОРОЖ] Не удалось снять маршруты туннеля: " + err.Error())
+				b.reportHealth("Не удалось запросить снятие маршрутов. Переподключите туннель. Ошибка: " + err.Error())
 				continue
 			}
 			core.ResetSessionState()
@@ -90,18 +113,21 @@ func (b *Bridge) watchdog(sessID uint64) {
 			h.lastResetAt = now
 			b.mu.Unlock()
 			b.onEvent("degraded", true)
+			b.reportHealth("Каналы к серверу отсутствуют. Маршруты IPv4 туннеля сняты. Восстанавливаю связь.")
 			b.log(fmt.Sprintf("[СТОРОЖ] Нет каналов к серверу %s — интернет пока напрямую, восстанавливаю", silent.Round(time.Second)))
 		case deg && act > 0:
 			if err := wg.SetTunnelRoutes(true); err != nil {
-				b.log("[СТОРОЖ] Не удалось вернуть маршруты туннеля: " + err.Error())
+				b.reportHealth("Не удалось запросить восстановление маршрутов. Переподключите туннель. Ошибка: " + err.Error())
 				continue
 			}
 			b.mu.Lock()
 			h.degraded = false
 			b.mu.Unlock()
 			b.onEvent("degraded", false)
+			b.onEvent("health", "")
 			b.log("[СТОРОЖ] Каналы вернулись — трафик снова через туннель")
 		case needReset:
+			b.reportHealth("Автовосстановление затянулось. Переподключите туннель; если это не поможет — перезапустите UWDT. Повторяю восстановление каналов.")
 			core.ResetSessionState()
 			b.mu.Lock()
 			h.lastResetAt = now
@@ -114,8 +140,7 @@ func (b *Bridge) watchdog(sessID uint64) {
 func (b *Bridge) log(msg string) {
 	b.onEvent("log", "INFO", msg)
 	b.mu.Lock()
-	if b.logFile != nil {
-		b.logFile.Write("INFO", msg)
-	}
+	file := b.logFile
 	b.mu.Unlock()
+	file.Write("INFO", msg)
 }

@@ -6,6 +6,10 @@ export function ASNames(arg1) {
   return window['go']['backend']['App']['ASNames'](arg1);
 }
 
+export function CancelPings() {
+  return window['go']['backend']['App']['CancelPings']();
+}
+
 export function CheckExclude(arg1) {
   return window['go']['backend']['App']['CheckExclude'](arg1);
 }
@@ -22,6 +26,10 @@ export function ConnectXray(arg1, arg2) {
   return window['go']['backend']['App']['ConnectXray'](arg1, arg2);
 }
 
+export function CreateProfile(arg1, arg2) {
+  return window['go']['backend']['App']['CreateProfile'](arg1, arg2);
+}
+
 export function DeleteProfile(arg1) {
   return window['go']['backend']['App']['DeleteProfile'](arg1);
 }
@@ -30,12 +38,16 @@ export function Disconnect() {
   return window['go']['backend']['App']['Disconnect']();
 }
 
+export function EditProfile(arg1, arg2, arg3) {
+  return window['go']['backend']['App']['EditProfile'](arg1, arg2, arg3);
+}
+
 export function FetchSubscription(arg1) {
   return window['go']['backend']['App']['FetchSubscription'](arg1);
 }
 
-export function GenerateReport(arg1) {
-  return window['go']['backend']['App']['GenerateReport'](arg1);
+export function GenerateReport() {
+  return window['go']['backend']['App']['GenerateReport']();
 }
 
 export function GetAutoStart() {
@@ -66,6 +78,10 @@ export function GetVersion() {
   return window['go']['backend']['App']['GetVersion']();
 }
 
+export function InspectAddress(arg1) {
+  return window['go']['backend']['App']['InspectAddress'](arg1);
+}
+
 export function InstallUpdate() {
   return window['go']['backend']['App']['InstallUpdate']();
 }
@@ -78,8 +94,24 @@ export function ListProfiles() {
   return window['go']['backend']['App']['ListProfiles']();
 }
 
+export function LoadCatalog() {
+  return window['go']['backend']['App']['LoadCatalog']();
+}
+
 export function PingServers(arg1) {
   return window['go']['backend']['App']['PingServers'](arg1);
+}
+
+export function RetryRules() {
+  return window['go']['backend']['App']['RetryRules']();
+}
+
+export function RuleStatus() {
+  return window['go']['backend']['App']['RuleStatus']();
+}
+
+export function SaveCatalog(arg1) {
+  return window['go']['backend']['App']['SaveCatalog'](arg1);
 }
 
 export function SaveLogs() {

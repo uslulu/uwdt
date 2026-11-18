@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { IconCircleHalf2, IconEye, IconEyeOff, IconX, IconHash } from '@tabler/icons-react';
 import type { Server } from '../lib/types';
-import { SaveProfile, FetchSubscription } from '../../wailsjs/go/backend/App';
+import { CreateProfile, FetchSubscription } from '../../wailsjs/go/backend/App';
 import type { backend } from '../../wailsjs/go/models';
 import { parseWdttUrl } from '../lib/utils/wdttLink';
-import { toastStore } from '../lib/stores/toastStore';
+import FormDialog from '../components/FormDialog';
 import Hash from './Hash';
+import '../components/ui.css';
+import './server-form.css';
 
 interface Props {
   onClose: () => void;
@@ -35,6 +37,7 @@ export default function AddServer({ onClose, onAdd, onAddSubscription }: Props) 
   const [power, setPower] = useState(9);
 
   const applyLink = (raw: string) => {
+    setError('');
     setLink(raw);
     const parsed = parseWdttUrl(raw.trim());
     if (!parsed) return;
@@ -64,6 +67,7 @@ export default function AddServer({ onClose, onAdd, onAddSubscription }: Props) 
   };
 
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   // Вставили подписку https://… или одиночный сервер vless://… — ручные поля не нужны
   const raw = link.trim();
@@ -75,18 +79,27 @@ export default function AddServer({ onClose, onAdd, onAddSubscription }: Props) 
     setSaving(true);
     try {
       const sub = await FetchSubscription(raw);
-      onAddSubscription(sub);
+      await onAddSubscription(sub);
       onClose();
-    } catch (e) {
-      toastStore.show(String(e), 5000);
+    } catch {
+      setError('Не удалось загрузить подписку. Проверьте ссылку и подключение к интернету, затем повторите.');
       setSaving(false);
     }
   };
 
-  const handleVless = () => {
+  const handleVless = async () => {
+    if (saving) return;
+    try {
+      const url = new URL(raw);
+      if (!url.hostname || !url.username || !url.port || Number(url.port) > 65535) throw new Error();
+    } catch {
+      setError('В ссылке VLESS должны быть ID, адрес сервера и порт. Вставьте полную ссылку.');
+      return;
+    }
+    setSaving(true);
     const n = name.trim() || vlessName(raw) || 'Сервер VLESS';
     const m = raw.match(/[?&]type=([^&#]+)/);
-    onAdd({ name: n, host: '', password: '', kind: 'xray', link: raw, transport: m ? m[1] : 'tcp', icon: 'globe' });
+    try { await onAdd({ name: n, host: '', password: '', kind: 'xray', link: raw, transport: m ? m[1] : 'tcp', icon: 'globe' }); } catch(e) {setError(String(e));setSaving(false);return;}
     onClose();
   };
 
@@ -96,7 +109,7 @@ export default function AddServer({ onClose, onAdd, onAddSubscription }: Props) 
     const host = `${ip.trim()}:${port.trim() || '56000'}`;
 
     try {
-      await SaveProfile(name.trim(), {
+      await CreateProfile(name.trim(), {
         peer: host,
         password,
         hashes: hashes.filter(h => h.trim()),
@@ -108,60 +121,45 @@ export default function AddServer({ onClose, onAdd, onAddSubscription }: Props) 
         turn_tcp: false,
       });
     } catch (e) {
-      console.warn('SaveProfile failed:', e);
-      toastStore.show('Не удалось сохранить профиль на диск', 3000);
+      console.warn('CreateProfile failed:', e);
+      setError(String(e));
       setSaving(false);
       return; // профиль в бэкенде — источник истины; без него сервер "потеряет" хеши
     }
 
-    onAdd({ name: name.trim(), host, password, hashes, power });
+    try { await onAdd({ name: name.trim(), host, password, hashes, power }); } catch(e) {setError(String(e));setSaving(false);return;}
     setSaving(false);
     onClose();
   };
 
   return (
     <>
-      <style>{`
-        .as-overlay { position: fixed; inset: 0; background: var(--overlay-bg); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 100; animation: overlay-in 0.3s ease-out; }
-        .as-modal { background: var(--surface); border-radius: 14px; padding: 20px; width: 380px; max-width: 95vw; box-shadow: var(--shadow); border: 1px solid var(--border); max-height: 90vh; overflow-y: auto; animation: modal-in 0.3s ease-out; }
-        .as-header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; color: var(--text); }
-        .as-title { font-size: 16px; font-weight: 600; flex: 1; color: var(--text); }
-        .as-close { background: none; border: none; cursor: pointer; font-size: 18px; color: var(--text); line-height: 1; padding: 0; }
-        .as-input { width: 100%; padding: 11px 14px; border: 1.5px solid var(--input-border); border-radius: 10px; font-size: 14px; font-family: 'Geist', sans-serif; outline: none; margin-bottom: 10px; box-sizing: border-box; color: var(--text); background: var(--input-bg); }
-        .as-input::placeholder { color: var(--text-4); }
-        .as-divider { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; color: var(--text-4); font-size: 12px; }
-        .as-divider::before, .as-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-        .as-btn { width: 100%; padding: 13px; border: none; border-radius: 10px; background: var(--accent); color: var(--accent-fg); font-size: 14px; font-family: 'Geist', sans-serif; font-weight: 600; cursor: pointer; margin-top: 4px; }
-        .as-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .as-slider-wrap { padding: 4px 0 11px; border-bottom: 1px solid var(--border-2); margin-bottom: 10px; }
-        .as-slider-label { display: flex; justify-content: space-between; font-size: 14px; color: var(--text); margin-bottom: 8px; }
-        .as-slider { width: 100%; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; outline: none; cursor: pointer; background: linear-gradient(to right, var(--accent) calc(var(--v) * 1%), var(--border) calc(var(--v) * 1%)); }
-        .as-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); cursor: pointer; }
-        .as-hash-btn { width: 100%; margin-top: 4px; margin-bottom: 10px; padding: 13px; border: 1.5px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font-size: 14px; font-family: 'Geist', sans-serif; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: border-color 0.15s, box-shadow 0.15s; }
-        .as-hash-btn:hover { border-color: var(--accent); box-shadow: 0 0 16px var(--accent-dim, rgba(139,92,246,0.2)); }
-        .as-note { font-size: 12px; line-height: 1.45; color: var(--text-3); margin: -2px 2px 12px; }
-        .as-pw-wrap { position: relative; display: flex; align-items: center; margin-bottom: 10px; }
-        .as-pw-toggle { position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: var(--text-4); padding: 0; display: flex; align-items: center; }
-      `}</style>
-      <div className="as-overlay">
-        <div className="as-modal" onClick={e => e.stopPropagation()}>
-          <div className="as-header">
-            <IconCircleHalf2 stroke={2} size={22} />
-            <span className="as-title">Добавление сервера</span>
-            <button type="button" className="as-close" onClick={onClose} aria-label="Закрыть"><IconX size={18} /></button>
+      <FormDialog title="Сервер или подписка" onClose={onClose}>
+          <div className="ui-modal-head">
+            <IconCircleHalf2 stroke={2} size={20} />
+            <span className="ui-modal-title">Сервер или подписка</span>
+            <button type="button" className="ui-icon-btn" onClick={onClose} aria-label="Закрыть"><IconX size={18} /></button>
           </div>
 
+          <form className="sf-form" onSubmit={e => {
+            e.preventDefault();
+            if (isSub) void handleSubscription();
+            else if (isVless) void handleVless();
+            else void handleAdd();
+          }}>
+          <label htmlFor="server-link">Ссылка на сервер или подписку</label>
           <input
-            className="as-input"
-            placeholder="Ссылка wdtt://, vless:// или подписка https://…"
+            className="ui-input"
+            id="server-link" placeholder="wdtt://, vless:// или https://…"
             value={link}
             onChange={e => applyLink(e.target.value)}
           />
 
+          {error && <p role="alert" className="sf-error">{error}</p>}
           {isSub && (
             <>
-              <div className="as-note">Подписка: UWDT скачает список серверов (VLESS) и добавит их отдельной группой. Подключение к ним — через движок Xray.</div>
-              <button type="button" className="as-btn" onClick={handleSubscription} disabled={saving}>
+              <div className="sf-note">Серверы подписки появятся в списке отдельной группой.</div>
+              <button type="submit" className="ui-btn ui-btn--primary ui-btn--block" disabled={saving}>
                 {saving ? 'Загрузка подписки…' : 'Загрузить подписку'}
               </button>
             </>
@@ -169,35 +167,35 @@ export default function AddServer({ onClose, onAdd, onAddSubscription }: Props) 
 
           {isVless && (
             <>
-              <input className="as-input" placeholder={vlessName(raw) || 'Название сервера'} value={name} onChange={e => setName(e.target.value)} />
-              <button type="button" className="as-btn" onClick={handleVless}>Добавить сервер</button>
+              <input className="ui-input" placeholder={vlessName(raw) || 'Название сервера'} value={name} onChange={e => setName(e.target.value)} />
+              <button type="submit" disabled={saving} className="ui-btn ui-btn--primary ui-btn--block">{saving ? 'Сохранение…' : 'Добавить сервер'}</button>
             </>
           )}
 
           {!isSub && !isVless && (<>
-          <div className="as-divider">или вручную</div>
+          <div className="sf-divider">или вручную</div>
 
-          <input className="as-input" placeholder="Название сервера" value={name} onChange={e => setName(e.target.value)} />
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input className="as-input" style={{ flex: 1 }} placeholder="IP сервера" value={ip} onChange={e => setIp(e.target.value)} />
-            <input className="as-input" style={{ width: 100 }} placeholder="Порт" value={port} onChange={e => setPort(e.target.value)} />
+          <input className="ui-input" placeholder="Название сервера" value={name} onChange={e => setName(e.target.value)} />
+          <div className="sf-row">
+            <input className="ui-input" placeholder="IP сервера" value={ip} onChange={e => setIp(e.target.value)} />
+            <input className="ui-input sf-port" placeholder="Порт" value={port} onChange={e => setPort(e.target.value)} />
           </div>
-          <div className="as-pw-wrap">
-            <input className="as-input" placeholder="Пароль туннеля" type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} style={{ paddingRight: 36, marginBottom: 0 }} />
-            <button type="button" className="as-pw-toggle" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}>
+          <div className="sf-pw-wrap">
+            <input className="ui-input" placeholder="Пароль туннеля" type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} />
+            <button type="button" className="sf-pw-toggle" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}>
               {showPassword ? <IconEyeOff size={18} /> : <IconEye size={18} />}
             </button>
           </div>
 
-          <div className="as-slider-wrap">
-            <div className="as-slider-label">
+          <div className="sf-slider-wrap">
+            <div className="sf-slider-label">
               <span>Мощность (всего потоков)</span>
               <span>{filledHashes === 0 ? 'нет хешей' : power}</span>
             </div>
             <input
               type="range" min={9} max={powerMax} step={9}
               value={Math.min(power, powerMax)}
-              className="as-slider"
+              className="sf-slider"
               disabled={filledHashes === 0}
               style={{ '--v': filledHashes > 0 ? Math.round((Math.min(power, powerMax) - 9) / Math.max(powerMax - 9, 1) * 100) : 0 } as React.CSSProperties}
               onChange={e => setPower(+e.target.value)}
@@ -205,17 +203,17 @@ export default function AddServer({ onClose, onAdd, onAddSubscription }: Props) 
             />
           </div>
 
-          <button type="button" className="as-hash-btn" onClick={() => setHashOpen(true)}>
+          <button type="button" className="sf-hash-btn" onClick={() => setHashOpen(true)}>
             <IconHash stroke={2} size={16} />
             Хеши ({filledHashes}/4)
           </button>
 
-          <button type="button" className="as-btn" onClick={handleAdd} disabled={!name.trim() || !ip.trim() || saving}>
-            {saving ? 'Сохранение...' : 'Добавить сервер'}
+          <button type="submit" className="ui-btn ui-btn--primary ui-btn--block" disabled={!name.trim() || !ip.trim() || saving}>
+            {saving ? 'Сохранение…' : 'Добавить сервер'}
           </button>
           </>)}
-        </div>
-      </div>
+          </form>
+      </FormDialog>
       {hashOpen && (
         <Hash
           hashes={hashes}

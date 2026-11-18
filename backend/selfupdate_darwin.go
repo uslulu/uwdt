@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,7 +28,7 @@ func installUpdate(zipPath string) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	tmp, err := os.MkdirTemp("", "uwdt-update-")
+	tmp, err := os.MkdirTemp(filepath.Dir(app), ".uwdt-update-")
 	if err != nil {
 		return nil, err
 	}
@@ -44,17 +45,11 @@ func installUpdate(zipPath string) (func() error, error) {
 		return nil, fmt.Errorf("подпись новой сборки не сходится: %s", strings.TrimSpace(string(out)))
 	}
 
-	old := app + ".old-update"
-	os.RemoveAll(old)
-	if err := os.Rename(app, old); err != nil {
-		return nil, fmt.Errorf("нет прав заменить %s: %w", app, err)
+	// Stage on the same volume. A crash during extraction or verification
+	// leaves the installed bundle intact. The swap is one filesystem operation.
+	if err := unix.RenamexNp(newApp, app, unix.RENAME_SWAP); err != nil {
+		return nil, fmt.Errorf("замена приложения: %w", err)
 	}
-	if out, err := exec.Command("ditto", newApp, app).CombinedOutput(); err != nil {
-		os.RemoveAll(app)
-		os.Rename(old, app) // откат
-		return nil, fmt.Errorf("установка: %v %s", err, strings.TrimSpace(string(out)))
-	}
-	os.RemoveAll(old)
 
 	return func() error {
 		return exec.Command("/bin/sh", "-c", "sleep 1; /usr/bin/open -n "+shellQuote(app)).Start()

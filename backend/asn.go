@@ -4,6 +4,7 @@ package backend
 // компания (по данным RIPEstat). Кэш на диске, обновление раз в неделю.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,7 +28,7 @@ func asnNetsCached(asn string) []string {
 }
 
 // asnNets — сети AS: свежий кэш или запрос к RIPEstat; при ошибке сети — старый кэш.
-func asnNets(asn string, logf wgLogFunc) []string {
+func asnNets(ctx context.Context, asn string, logf wgLogFunc) []string {
 	path := asnCachePath(asn)
 	var cached []string
 	if data, err := os.ReadFile(path); err == nil {
@@ -36,8 +37,11 @@ func asnNets(asn string, logf wgLogFunc) []string {
 			return cached
 		}
 	}
-	nets, err := fetchASNNets(asn)
+	nets, err := fetchASNNets(ctx, asn)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		logOnce(logf, "asn:"+asn, fmt.Sprintf("Исключение %s: не удалось получить сети (%v)", asn, err))
 		return cached
 	}
@@ -46,9 +50,13 @@ func asnNets(asn string, logf wgLogFunc) []string {
 	return nets
 }
 
-func fetchASNNets(asn string) ([]string, error) {
+func fetchASNNets(ctx context.Context, asn string) ([]string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get("https://stat.ripe.net/data/announced-prefixes/data.json?resource=" + asn)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://stat.ripe.net/data/announced-prefixes/data.json?resource="+asn, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

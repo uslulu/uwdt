@@ -1,3 +1,4 @@
+import type { ExcludeEntry } from './types';
 // Готовые наборы исключений: сервис → его сети (номер AS по реестру RIPE) и домены.
 // Номера сверены через RIPEstat (as-overview) 08.10.2026.
 export interface Preset {
@@ -47,7 +48,32 @@ export const PRESET_GROUPS: { title: string; presets: Preset[] }[] = [
   },
 ];
 
-// Подпись записи списка, если она пришла из набора
-export const PRESET_LABEL: Record<string, string> = Object.fromEntries(
-  PRESET_GROUPS.flatMap(g => g.presets.flatMap(p => p.values.map(v => [v, p.label]))),
-);
+export function directCount(entries: ExcludeEntry[]) {
+  return new Set(entries.filter(e => e.enabled).map(e => e.source ? 'set:' + e.source : 'manual:' + e.value)).size;
+}
+
+export function presetCount(entries: ExcludeEntry[], preset: Preset) {
+  return preset.values.filter(value => entries.some(e => e.enabled && e.source === preset.label && e.value === value)).length;
+}
+
+export function changePreset(entries: ExcludeEntry[], preset: Preset) {
+  const others = entries.filter(e => e.source !== preset.label);
+  return presetCount(entries, preset) === preset.values.length ? others :
+    [...others, ...preset.values.map(value => ({ value, enabled: true, source: preset.label }))];
+}
+
+function quantity(n: number, forms: [string, string, string]) {
+  const unit = new Intl.PluralRules('ru').select(n);
+  return n + ' ' + forms[unit === 'one' ? 0 : unit === 'few' ? 1 : 2];
+}
+export function directSummary(entries: ExcludeEntry[], russia: boolean) {
+  const enabled = entries.filter(e => e.enabled);
+  const sets = new Set(enabled.map(e => e.source).filter(Boolean)).size;
+  const manual = new Set(enabled.filter(e => !e.source).map(e => e.value)).size;
+  const parts = [
+    russia && 'российские сети',
+    sets > 0 && quantity(sets, ['набор', 'набора', 'наборов']),
+    manual > 0 && quantity(manual, ['правило', 'правила', 'правил']),
+  ].filter((part): part is string => typeof part === 'string');
+  return 'Напрямую: ' + (new Intl.ListFormat('ru').format(parts) || 'нет правил');
+}

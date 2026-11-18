@@ -2,6 +2,12 @@
 
 package main
 
+/*
+#cgo LDFLAGS: -framework UniformTypeIdentifiers
+// Wails uses UTType for native file dialogs when the SDK provides it.
+*/
+import "C"
+
 import (
 	"embed"
 	"os"

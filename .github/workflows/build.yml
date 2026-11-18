@@ -34,12 +34,15 @@ jobs:
           cd frontend
           npm ci
           npm run build
+          npm run lint
 
       - name: Frontend tests
         run: cd frontend && npx vitest run
 
-      - name: Go tests
-        run: go test ./backend/ ./tests/
+      - name: Go race tests
+        run: |
+          go test -race ./backend/ ./tests/
+          go -C core test -race ./...
 
       # Windows собирается обычным go build с syso из scripts/windows-resources.json;
       # wails build добавляет второй .rsrc и линковка падает.
@@ -69,6 +72,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Go race tests
+        run: |
+          go test -race ./backend/ ./tests/
+          go -C core test -race ./...
 
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}

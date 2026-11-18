@@ -3,14 +3,18 @@ package backend_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+
 	"testing"
 
+	"github.com/zalando/go-keyring"
 	"pwdtt/backend"
 )
 
 // newTestStore создаёт Store с временной директорией.
 func newTestStore(t *testing.T) *backend.Store {
 	t.Helper()
+	keyring.MockInit()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	// os.UserConfigDir() на Windows читает %AppData%, на Linux — XDG_CONFIG_HOME:
@@ -175,7 +179,7 @@ func TestLoadProfile_InvalidName(t *testing.T) {
 	}
 }
 
-func TestSaveProfile_SanitizesName(t *testing.T) {
+func TestSaveProfile_PreservesDisplayName(t *testing.T) {
 	s := newTestStore(t)
 
 	p := backend.ProfileData{PeerAddr: "1.2.3.4:5555"}
@@ -184,7 +188,7 @@ func TestSaveProfile_SanitizesName(t *testing.T) {
 	}
 
 	// Должен быть загружен как "testserver"
-	loaded, err := s.LoadProfile("testserver")
+	loaded, err := s.LoadProfile("test@#$server")
 	if err != nil {
 		t.Fatalf("LoadProfile sanitized name: %v", err)
 	}
@@ -275,54 +279,6 @@ func TestDeleteProfile_EmptyName(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════
-// CreateLogFile
-// ═══════════════════════════════════════════════════
-
-func TestCreateLogFile(t *testing.T) {
-	s := newTestStore(t)
-	logsDir := filepath.Join(pwdttDir(t), "logs")
-
-	f, err := s.CreateLogFile("1.2.3.4")
-	if err != nil {
-		t.Fatalf("CreateLogFile: %v", err)
-	}
-	defer f.Close()
-
-	entries, err := os.ReadDir(logsDir)
-	if err != nil {
-		t.Fatalf("ReadDir logs: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Errorf("expected 1 log file, got %d", len(entries))
-	}
-	if filepath.Ext(entries[0].Name()) != ".log" {
-		t.Errorf("expected .log extension, got %q", filepath.Ext(entries[0].Name()))
-	}
-}
-
-func TestCreateLogFile_Writable(t *testing.T) {
-	s := newTestStore(t)
-
-	f, err := s.CreateLogFile("1.2.3.4")
-	if err != nil {
-		t.Fatalf("CreateLogFile: %v", err)
-	}
-	defer f.Close()
-
-	n, err := f.Write([]byte("test log line\n"))
-	if err != nil {
-		t.Fatalf("Write to log file: %v", err)
-	}
-	if n != 14 {
-		t.Errorf("expected 14 bytes written, got %d", n)
-	}
-}
-
-// ═══════════════════════════════════════════════════
-// OpenLogFile / LogFile.Write
-// ═══════════════════════════════════════════════════
-
 func TestOpenLogFile(t *testing.T) {
 	s := newTestStore(t)
 	logsDir := filepath.Join(pwdttDir(t), "logs")
@@ -412,5 +368,42 @@ func TestDeviceID_StablePerInstall(t *testing.T) {
 	}
 	if again := backend.NewStore().DeviceID(); again != id {
 		t.Errorf("DeviceID поменялся между запусками: %q → %q", id, again)
+	}
+}
+
+func TestStoreWritesSecretsPrivately(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file modes")
+	}
+	store := newTestStore(t)
+	base := pwdttDir(t)
+	profile := filepath.Join(base, "servers", "private.json")
+	if err := os.WriteFile(profile, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(profile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveProfile("private", backend.ProfileData{Password: "test-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSettings(backend.AppSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	if store.DeviceID() == "unknown" {
+		t.Fatal("device ID was not persisted")
+	}
+	for _, path := range []string{profile, filepath.Join(base, "config.json"), filepath.Join(base, "device_id")} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s permissions = %04o, want 0600", filepath.Base(path), got)
+		}
+	}
+	got, err := store.LoadProfile("private")
+	if err != nil || got.Password != "test-secret" {
+		t.Fatalf("profile roundtrip: %v", err)
 	}
 }

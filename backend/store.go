@@ -1,11 +1,14 @@
 package backend
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -25,7 +28,10 @@ const maxProfileNameRunes = 100
 //	~/.config/pwdtt/servers/<name>.json — ProfileData (серверы)
 //	~/.config/pwdtt/logs/*.log          — логи сессий
 type Store struct {
-	baseDir string // ~/.config/pwdtt
+	vault      vault
+	settingsMu sync.Mutex
+	profilesMu sync.Mutex
+	baseDir    string // ~/.config/pwdtt
 }
 
 // NewStore создаёт Store и создаёт директории если нужно.
@@ -61,11 +67,32 @@ func (s *Store) LoadSettings() AppSettings {
 
 // SaveSettings сохраняет настройки в config.json (атомарно).
 func (s *Store) SaveSettings(settings AppSettings) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	return s.saveSettings(settings)
+}
+func (s *Store) saveSettings(settings AppSettings) error {
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
 	return atomicWrite(filepath.Join(s.baseDir, "config.json"), data)
+}
+
+func (s *Store) updateSettings(change func(*AppSettings)) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	settings := AppSettings{AutoStart: true, ObfsMode: "audio"}
+	data, err := os.ReadFile(filepath.Join(s.baseDir, "config.json"))
+	if err == nil {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	change(&settings)
+	return s.saveSettings(settings)
 }
 
 // ═══════════════════════════════════════════════════
@@ -89,28 +116,136 @@ func sanitizeProfileName(name string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// LoadProfile загружает профиль сервера по имени.
-func (s *Store) LoadProfile(name string) (*ProfileData, error) {
-	name = sanitizeProfileName(name)
-	if name == "" {
-		return nil, fmt.Errorf("invalid profile name")
+// A legacy filename becomes an immutable storage key. New profiles use UUIDs.
+type storedProfile struct {
+	Secret *sealedData `json:"secret,omitempty"`
+	ProfileData
+	DisplayName string `json:"displayName,omitempty"`
+}
+
+func (s *Store) profiles() (map[string]string, error) {
+	dir := filepath.Join(s.baseDir, "servers")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
-	path := filepath.Join(s.baseDir, "servers", name+".json")
+	paths := make(map[string]string)
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		var p storedProfile
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, fmt.Errorf("%s: %w", e.Name(), err)
+		}
+		name := p.DisplayName
+		if name == "" {
+			name = strings.TrimSuffix(e.Name(), ".json")
+		}
+		if _, ok := paths[name]; ok {
+			return nil, fmt.Errorf("повтор имени профиля %q", name)
+		}
+		paths[name] = path
+	}
+	return paths, nil
+}
+func (s *Store) readProfile(path string) (*ProfileData, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", name, err)
+		return nil, err
 	}
-	var p ProfileData
-	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("profile %q parse: %w", name, err)
+	var p storedProfile
+	if err = json.Unmarshal(data, &p); err != nil {
+		return nil, err
 	}
-	return &p, nil
+	if p.Secret != nil {
+		plain, err := s.vault.open(*p.Secret, filepath.Base(path))
+		if err != nil {
+			return nil, err
+		}
+		var creds profileCredentials
+		if err = json.Unmarshal(plain, &creds); err != nil {
+			return nil, err
+		}
+		p.Password, p.Hashes = creds.Password, creds.Hashes
+	} else if p.Password != "" || len(p.Hashes) > 0 {
+		// Preserve readable legacy data if the OS keychain is locked.
+		_ = s.persistProfile(path, p)
+	}
+	return &p.ProfileData, nil
+}
+
+type profileCredentials struct {
+	Password string
+	Hashes   []string
+}
+
+func (s *Store) persistProfile(path string, p storedProfile) error {
+	if p.Password != "" || len(p.Hashes) > 0 {
+		data, err := json.Marshal(profileCredentials{p.Password, p.Hashes})
+		if err != nil {
+			return err
+		}
+		blob, err := s.vault.seal(data, filepath.Base(path))
+		if err != nil {
+			return err
+		}
+		p.Secret = &blob
+		p.Password = ""
+		p.Hashes = nil
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, data)
+}
+
+// Older WebViews retained punctuation in the label while the legacy file
+// used the sanitized name. Never treat a renamed record as a legacy alias.
+func profilePath(paths map[string]string, name string) string {
+	if path := paths[name]; path != "" {
+		return path
+	}
+	alias := sanitizeProfileName(name)
+	if alias == name || alias == "" {
+		return ""
+	}
+	path := paths[alias]
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var record storedProfile
+	if json.Unmarshal(data, &record) == nil && record.DisplayName == "" {
+		return path
+	}
+	return ""
+}
+func (s *Store) LoadProfile(name string) (*ProfileData, error) {
+	s.profilesMu.Lock()
+	defer s.profilesMu.Unlock()
+	paths, err := s.profiles()
+	if err != nil {
+		return nil, err
+	}
+	return s.readProfile(profilePath(paths, name))
 }
 
 // DeviceID — постоянный ID этой установки UWDT. Сервер выдаёт WireGuard-пир
 // по device_id: без него все устройства приходили как «unknown» и делили
 // один пир — ответы сервера уходили то на мак, то на Windows.
 func (s *Store) DeviceID() string {
+	s.profilesMu.Lock()
+	defer s.profilesMu.Unlock()
 	path := filepath.Join(s.baseDir, "device_id")
 	if data, err := os.ReadFile(path); err == nil {
 		if id := strings.TrimSpace(string(data)); id != "" {
@@ -126,119 +261,234 @@ func (s *Store) DeviceID() string {
 
 // SaveProfile сохраняет профиль сервера (атомарно).
 func (s *Store) SaveProfile(name string, p ProfileData) error {
-	name = sanitizeProfileName(name)
-	if name == "" {
-		return fmt.Errorf("invalid profile name")
+	return s.writeProfile("", name, p)
+}
+func (s *Store) writeProfile(previous, name string, p ProfileData) error {
+	return s.changeProfile(previous, name, p, false)
+}
+func (s *Store) changeProfile(previous, name string, p ProfileData, create bool) error {
+	if sanitizeProfileName(name) == "" || len([]rune(name)) > maxProfileNameRunes {
+		return fmt.Errorf("недопустимое имя")
 	}
-	if p.DeviceID == "" {
-		if existing, err := s.LoadProfile(name); err == nil && existing.DeviceID != "" {
-			p.DeviceID = existing.DeviceID
-		} else {
-			p.DeviceID = uuid.New().String()
-		}
-	}
-	data, err := json.MarshalIndent(p, "", "  ")
+	s.profilesMu.Lock()
+	defer s.profilesMu.Unlock()
+	paths, err := s.profiles()
 	if err != nil {
 		return err
 	}
-	return atomicWrite(filepath.Join(s.baseDir, "servers", name+".json"), data)
-}
-
-// DeleteProfile удаляет профиль сервера.
-func (s *Store) DeleteProfile(name string) error {
-	name = sanitizeProfileName(name)
-	if name == "" {
-		return fmt.Errorf("invalid profile name")
+	path := paths[name]
+	if create && path != "" {
+		return fmt.Errorf("имя %q занято", name)
 	}
-	return os.Remove(filepath.Join(s.baseDir, "servers", name+".json"))
-}
-
-// ListProfiles возвращает все профили серверов.
-func (s *Store) ListProfiles() map[string]ProfileData {
-	dir := filepath.Join(s.baseDir, "servers")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	result := make(map[string]ProfileData)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	if previous != "" {
+		path = profilePath(paths, previous)
+		if path == "" {
+			return fmt.Errorf("профиль %q отсутствует", previous)
 		}
-		name := strings.TrimSuffix(e.Name(), ".json")
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+	}
+	for existing, other := range paths {
+		if strings.EqualFold(existing, name) && other != path {
+			return fmt.Errorf("имя %q занято", name)
+		}
+	}
+	if path == "" {
+		path = filepath.Join(s.baseDir, "servers", uuid.NewString()+".json")
+	} else {
+		old, err := s.readProfile(path)
 		if err != nil {
-			continue
+			return err
 		}
-		var p ProfileData
-		if err := json.Unmarshal(data, &p); err != nil {
-			continue
+		if old.DeviceID != "" {
+			p.DeviceID = old.DeviceID
 		}
-		result[name] = p
 	}
-	return result
+	if p.DeviceID == "" {
+		p.DeviceID = uuid.NewString()
+	}
+	return s.persistProfile(path, storedProfile{ProfileData: p, DisplayName: name})
 }
-
-// CreateLogFile создаёт файл лога для сессии.
-func (s *Store) CreateLogFile(peerIP string) (*os.File, error) {
-	dir := filepath.Join(s.baseDir, "logs")
-	return os.CreateTemp(dir, "*.log")
+func (s *Store) DeleteProfile(name string) error {
+	s.profilesMu.Lock()
+	defer s.profilesMu.Unlock()
+	paths, err := s.profiles()
+	if err != nil {
+		return err
+	}
+	return os.Remove(profilePath(paths, name))
+}
+func (s *Store) ListProfiles() map[string]ProfileData {
+	profiles, _ := s.listProfiles()
+	return profiles
+}
+func (s *Store) listProfiles() (map[string]ProfileData, error) {
+	s.profilesMu.Lock()
+	defer s.profilesMu.Unlock()
+	paths, err := s.profiles()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]ProfileData{}
+	for name, path := range paths {
+		if p, err := s.readProfile(path); err == nil {
+			out[name] = *p
+		} else {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // ═══════════════════════════════════════════════════
 // LOG FILE — запись полных логов в файл
 // ═══════════════════════════════════════════════════
 
+const logSegmentBytes = 4 << 20
+
+type logRecord struct {
+	flush      chan error
+	level, msg string
+	at         time.Time
+}
 type LogFile struct {
-	file    *os.File
-	pending int // буферизованные строки до sync
+	mu      sync.RWMutex
+	queue   chan logRecord
+	done    chan struct{}
+	dropped atomic.Int64
+	closed  bool
 }
 
-// OpenLogFile открывает новый файл лога для сессии.
 func (s *Store) OpenLogFile() *LogFile {
 	dir := filepath.Join(s.baseDir, "logs")
-	os.MkdirAll(dir, 0o755)
-	ts := time.Now().Format("2006-01-02_15-04-05")
-	f, err := os.Create(filepath.Join(dir, ts+".log"))
+	f, err := os.CreateTemp(dir, time.Now().Format("2006-01-02_15-04-05.000000000")+"-*.log")
 	if err != nil {
 		return nil
 	}
-	return &LogFile{file: f}
+	lf := &LogFile{queue: make(chan logRecord, 256), done: make(chan struct{})}
+	pruneSessionLogs(dir)
+	go lf.writeLoop(f)
+	return lf
 }
 
-// Write пишет строку в файл лога.
-// Sync каждые 50 строк чтобы не душить I/O.
+// Keep recent bounded sessions. Historical files with other names are untouched.
+func pruneSessionLogs(dir string) {
+	paths, _ := filepath.Glob(filepath.Join(dir, "????-??-??_??-??-??.?????????-*.log"))
+	if len(paths) > 8 {
+		for _, path := range paths[:len(paths)-8] {
+			_ = os.Remove(path)
+			_ = os.Remove(path + ".previous")
+		}
+	}
+}
+func (lf *LogFile) writeLoop(file *os.File) {
+	defer close(lf.done)
+	path := file.Name()
+	buffer := bufio.NewWriterSize(file, 32<<10)
+	size, pending := 0, 0
+	for record := range lf.queue {
+		if record.flush != nil {
+			record.flush <- buffer.Flush()
+			continue
+		}
+		if size >= logSegmentBytes {
+			buffer.Flush()
+			file.Sync()
+			file.Close()
+			if err := os.Rename(path, path+".previous"); err != nil {
+				return
+			}
+			var err error
+			file, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				return
+			}
+			buffer.Reset(file)
+			size = 0
+		}
+		if skipped := lf.dropped.Swap(0); skipped > 0 {
+			fmt.Fprintf(buffer, "[ЖУРНАЛ] Пропущено фоновых строк: %d\n", skipped)
+		}
+		n, _ := fmt.Fprintf(buffer, "[%s] [%s] %s\n", record.at.Format("15:04:05"), record.level, record.msg)
+		size += n
+		pending++
+		if pending >= 50 || strings.Contains(record.msg, "[МАРШРУТЫ]") {
+			buffer.Flush()
+			file.Sync()
+			pending = 0
+		}
+	}
+	buffer.Flush()
+	file.Sync()
+	file.Close()
+}
 func (lf *LogFile) Write(level, msg string) {
-	if lf == nil || lf.file == nil {
+	if lf == nil {
 		return
 	}
-	ts := time.Now().Format("15:04:05")
-	fmt.Fprintf(lf.file, "[%s] [%s] %s\n", ts, level, msg)
-	lf.pending++
-	if lf.pending >= 50 {
-		lf.file.Sync()
-		lf.pending = 0
+	lf.mu.RLock()
+	defer lf.mu.RUnlock()
+	if lf.closed {
+		return
+	}
+	record := logRecord{level: level, msg: msg, at: time.Now()}
+	if level == "SKIP" {
+		select {
+		case lf.queue <- record:
+		default:
+			lf.dropped.Add(1)
+		}
+		return
+	}
+	select {
+	case lf.queue <- record:
+	case <-lf.done:
 	}
 }
-
-// Close закрывает файл лога.
-func (lf *LogFile) Close() {
-	if lf != nil && lf.file != nil {
-		lf.file.Sync()
-		lf.file.Close()
+func (lf *LogFile) Flush() error {
+	if lf == nil {
+		return nil
 	}
+	lf.mu.RLock()
+	defer lf.mu.RUnlock()
+	if lf.closed {
+		<-lf.done
+		return nil
+	}
+	ack := make(chan error, 1)
+	select {
+	case lf.queue <- logRecord{flush: ack}:
+	case <-lf.done:
+		return fmt.Errorf("журнал закрыт")
+	}
+	select {
+	case err := <-ack:
+		return err
+	case <-lf.done:
+		return fmt.Errorf("журнал закрыт")
+	}
+}
+func (lf *LogFile) Close() {
+	if lf == nil {
+		return
+	}
+	lf.mu.Lock()
+	if !lf.closed {
+		close(lf.queue)
+		lf.closed = true
+	}
+	lf.mu.Unlock()
+	<-lf.done
 }
 
 // ReadLatestLog читает содержимое последнего лог-файла.
 func (s *Store) ReadLatestLog() string {
 	dir := filepath.Join(s.baseDir, "logs")
-	entries, err := os.ReadDir(dir)
+	entries, err := filepath.Glob(filepath.Join(dir, "*.log"))
 	if err != nil || len(entries) == 0 {
 		return ""
 	}
 	// берём последний (сортировка по имени = по времени)
 	latest := entries[len(entries)-1]
-	data, err := os.ReadFile(filepath.Join(dir, latest.Name()))
+	data, err := os.ReadFile(latest)
 	if err != nil {
 		return ""
 	}
@@ -260,17 +510,30 @@ func configDir() string {
 
 // atomicWrite записывает файл атомарно: tmp → rename.
 func atomicWrite(path string, data []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	name := tmp.Name()
+	defer os.Remove(name)
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(name, path)
 }
 
 // NewTestStore создаёт Store с временной директорией (для тестов).
 // Подменяет HOME и, на Windows, AppData — os.UserConfigDir() читает именно их,
 // иначе тесты пишут в реальный конфиг пользователя.
-func NewTestStore(t interface{ TempDir() string; Setenv(string, string) }) *Store {
+func NewTestStore(t interface {
+	TempDir() string
+	Setenv(string, string)
+}) *Store {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("AppData", filepath.Join(dir, "AppData", "Roaming"))

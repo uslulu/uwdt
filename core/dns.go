@@ -7,14 +7,16 @@ import (
 	"time"
 )
 
-func setupGlobalResolver() {
+var turnResolver = newTURNResolver()
+
+func newTURNResolver() *net.Resolver {
 	dialer := &net.Dialer{
 		Timeout:   3 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
 	yandexDNSServers := []string{"77.88.8.8:53", "77.88.8.1:53"}
 
-	net.DefaultResolver = &net.Resolver{
+	return &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 			var lastErr error

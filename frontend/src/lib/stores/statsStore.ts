@@ -1,6 +1,7 @@
 // Скорость туннеля: ядро раз в 3 с присылает накопленные байты, скорость — разница между замерами.
 export interface TunnelStats {
   active: number;
+  receivedAt: number;
   downBps: number; // бит/с
   upBps: number;
 }
@@ -18,11 +19,12 @@ export const statsStore = {
     const now = performance.now();
     const up = raw.bytes_up ?? 0;
     const down = raw.bytes_down ?? 0;
+    const receivedAt = down > (prev?.down ?? 0) ? Date.now() : current?.receivedAt ?? 0;
     if (prev && now > prev.t && up >= prev.up && down >= prev.down) {
       const dt = (now - prev.t) / 1000;
-      current = { active: raw.active ?? 0, upBps: ((up - prev.up) * 8) / dt, downBps: ((down - prev.down) * 8) / dt };
+      current = { receivedAt, active: raw.active ?? 0, upBps: ((up - prev.up) * 8) / dt, downBps: ((down - prev.down) * 8) / dt };
     } else {
-      current = { active: raw.active ?? 0, upBps: 0, downBps: 0 };
+      current = { receivedAt, active: raw.active ?? 0, upBps: 0, downBps: 0 };
     }
     prev = { up, down, t: now };
     emit();

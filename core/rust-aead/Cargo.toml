@@ -1,0 +1,14 @@
+[package]
+name = "uwdt-aead"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+ring = "0.17.14"
+
+[profile.release]
+panic = "abort"

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/cipher"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -34,27 +35,24 @@ type connectedUDPConn struct{ *net.UDPConn }
 
 func (c *connectedUDPConn) WriteTo(p []byte, _ net.Addr) (int, error) { return c.Write(p) }
 
-func dialTURNConn(turnAddr string, tcp bool) (net.PacketConn, error) {
-	if !tcp {
-		resolved, err := net.ResolveUDPAddr("udp", turnAddr)
-		if err != nil {
-			return nil, fmt.Errorf("резолв TURN: %w", err)
-		}
-		c, err := net.DialUDP("udp", nil, resolved)
-		if err != nil {
-			return nil, fmt.Errorf("подключение TURN UDP: %w", err)
-		}
-		_ = c.SetReadBuffer(socketBufSize)
-		_ = c.SetWriteBuffer(socketBufSize)
-		return &connectedUDPConn{c}, nil
+func dialTURNConn(ctx context.Context, turnAddr string, tcp bool) (net.PacketConn, string, error) {
+	network := "udp"
+	if tcp {
+		network = "tcp"
 	}
-
-	d := net.Dialer{Timeout: 10 * time.Second}
-	c, err := d.Dial("tcp", turnAddr)
+	d := net.Dialer{Timeout: 10 * time.Second, Resolver: turnResolver}
+	c, err := d.DialContext(ctx, network, turnAddr)
 	if err != nil {
-		return nil, fmt.Errorf("подключение TURN TCP: %w", err)
+		return nil, "", fmt.Errorf("подключение TURN %s: %w", strings.ToUpper(network), err)
 	}
-	return turn.NewSTUNConn(c), nil
+	remote := c.RemoteAddr().String()
+	if tcp {
+		return turn.NewSTUNConn(c), remote, nil
+	}
+	udp := c.(*net.UDPConn)
+	_ = udp.SetReadBuffer(socketBufSize)
+	_ = udp.SetWriteBuffer(socketBufSize)
+	return &connectedUDPConn{udp}, remote, nil
 }
 
 // SessionErrorType — тип ошибки сессии
@@ -160,7 +158,7 @@ func RunSession(
 	}
 	turnAddrResolved := net.JoinHostPort(urlhost, urlport)
 
-	turnConn, err := dialTURNConn(turnAddrResolved, tp.TCPTransport)
+	turnConn, turnEndpoint, err := dialTURNConn(ctx, turnAddrResolved, tp.TCPTransport)
 	if err != nil {
 		if isNetworkDown(err) {
 			return false, &SessionError{Type: SessionErrorNetwork, Address: turnAddr, Err: err}
@@ -187,8 +185,8 @@ func RunSession(
 	}
 
 	tc, err := turn.NewClient(&turn.ClientConfig{
-		STUNServerAddr:         turnAddrResolved,
-		TURNServerAddr:         turnAddrResolved,
+		STUNServerAddr:         turnEndpoint,
+		TURNServerAddr:         turnEndpoint,
 		Conn:                   turnConn,
 		Username:               turnUser,
 		Password:               turnPass,
@@ -317,13 +315,19 @@ func RunSession(
 	}()
 
 	var relayWg sync.WaitGroup
-	relayWg.Add(2)
 
 	useWrap := len(tp.WrapKey) == wrapKeyLen
 
+	var packetAEAD cipher.AEAD
+	var releaseAEAD func()
 	var obfsCfg *ObfsConfig
 	var obfsWriteState *ObfsState
 	if useWrap {
+		var err error
+		packetAEAD, releaseAEAD, err = newSessionAEAD(tp.WrapKey)
+		if err != nil {
+			return false, &SessionError{Type: SessionErrorFatal, Address: turnAddr, Err: err}
+		}
 		obfsCfg = NewObfsConfig(obfsMode)
 		obfsWriteState = NewObfsState()
 	}
@@ -336,7 +340,15 @@ func RunSession(
 		_ = turnConn.SetDeadline(time.Now())
 	})
 	defer stopRelay()
-	defer sessCancel()
+	defer func() {
+		sessCancel()
+		relayWg.Wait()
+		if releaseAEAD != nil {
+			releaseAEAD()
+		}
+	}()
+
+	relayWg.Add(2)
 
 	go func() {
 		defer relayWg.Done()
@@ -345,6 +357,14 @@ func RunSession(
 		readBufLen := readBufSize + 80
 		buf := make([]byte, readBufLen)
 		plain := make([]byte, readBufSize)
+		invalid := 0
+		logInvalid := func(reason any, n int) {
+			invalid++
+			if invalid == 1 || invalid%256 == 0 {
+				log.Printf("[СЕССИЯ #%d] OBFS unwrap: %v (n=%d, всего %d)", sessionID, reason, n, invalid)
+			}
+		}
+
 		for {
 			n, _, readErr := relay.ReadFrom(buf)
 			if readErr != nil {
@@ -356,12 +376,12 @@ func RunSession(
 			payload := buf[:n]
 			if useWrap {
 				if !obfsIsRTPPacket(payload) {
-					log.Printf("[СЕССИЯ #%d] OBFS unwrap: unexpected packet (n=%d)", sessionID, n)
+					logInvalid("unexpected packet", n)
 					continue
 				}
-				m, wrapErr := obfsUnwrapPacket(tp.WrapKey, payload, plain)
+				m, wrapErr := obfsOpenPacket(packetAEAD, payload, plain)
 				if wrapErr != nil {
-					log.Printf("[СЕССИЯ #%d] OBFS unwrap: %v (n=%d)", sessionID, wrapErr, n)
+					logInvalid(wrapErr, n)
 					continue
 				}
 				payload = plain[:m]
@@ -377,6 +397,7 @@ func RunSession(
 		defer sessCancel()
 		b := make([]byte, readBufSize)
 		firstWrite := true
+		var wrapped []byte
 		for {
 			n, _, readErr := pipeA.ReadFrom(b)
 			if readErr != nil {
@@ -385,7 +406,8 @@ func RunSession(
 			out := b[:n]
 			if useWrap {
 				if obfsCfg != nil && obfsWriteState != nil {
-					wrapped, wrapErr := obfsWrapPacket(tp.WrapKey, out, obfsCfg, obfsWriteState)
+					var wrapErr error
+					wrapped, wrapErr = obfsSealPacket(packetAEAD, out, obfsCfg, obfsWriteState, wrapped)
 					if wrapErr != nil {
 						log.Printf("[СЕССИЯ #%d] OBFS wrap: %v", sessionID, wrapErr)
 						return

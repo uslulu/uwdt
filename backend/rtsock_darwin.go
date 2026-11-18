@@ -91,12 +91,12 @@ func (s *rtSock) Change(cidr string, gw net.IP) error {
 	return s.send(syscall.RTM_CHANGE, n, gw)
 }
 
-func (s *rtSock) Delete(cidr string) error {
+func (s *rtSock) Delete(cidr string, gw net.IP) error {
 	_, n, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return err
 	}
-	err = s.send(syscall.RTM_DELETE, n, nil)
+	err = s.send(syscall.RTM_DELETE, n, gw)
 	if errors.Is(err, syscall.ESRCH) {
 		return nil // и так нет
 	}
@@ -122,12 +122,15 @@ func gatewayRoutes() (map[string]rtEntry, error) {
 	names := map[int]string{}
 	for _, m := range msgs {
 		rm, ok := m.(*route.RouteMessage)
-		if !ok || rm.Flags&syscall.RTF_GATEWAY == 0 || len(rm.Addrs) <= syscall.RTAX_GATEWAY {
+		if !ok || len(rm.Addrs) <= syscall.RTAX_GATEWAY {
 			continue
 		}
 		dst, ok1 := rm.Addrs[syscall.RTAX_DST].(*route.Inet4Addr)
-		gw, ok2 := rm.Addrs[syscall.RTAX_GATEWAY].(*route.Inet4Addr)
-		if !ok1 || !ok2 {
+		gateway := ""
+		if g, ok := rm.Addrs[syscall.RTAX_GATEWAY].(*route.Inet4Addr); ok {
+			gateway = net.IP(g.IP[:]).String()
+		}
+		if !ok1 {
 			continue
 		}
 		ones := 32
@@ -147,7 +150,11 @@ func gatewayRoutes() (map[string]rtEntry, error) {
 			}
 			names[rm.Index] = name
 		}
-		out[n.String()] = rtEntry{gw: net.IP(gw.IP[:]).String(), iface: name}
+		entry := rtEntry{gw: gateway, iface: name}
+		if prev, exists := out[n.String()]; exists && prev != entry {
+			entry = rtEntry{iface: "несколько интерфейсов"}
+		}
+		out[n.String()] = entry
 	}
 	return out, nil
 }

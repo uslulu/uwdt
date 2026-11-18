@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,25 +14,33 @@ import (
 
 // Bridge — мост между App.go и ядром.
 type Bridge struct {
-	ctx     context.Context
-	store   *Store
-	onEvent func(name string, args ...any)
-	mu      sync.Mutex
-	core    *core.Core
-	running bool
-	logFile *LogFile // полный лог сессии
-	stage   stageTracker
-	health  sessionHealth
-	session uint64 // номер сессии; stale forwardEvents не должен трогать новую
-	xray    bool   // текущая сессия — сервер из подписки (Xray), без ядра VK TURN
+	applyXray       func(string, []string, wgLogFunc) error
+	ctx             context.Context
+	store           *Store
+	onEvent         func(name string, args ...any)
+	lifecycle       sync.Mutex
+	mu              sync.Mutex
+	stopping        bool
+	sessionWorkDone <-chan struct{}
+	cancelSession   context.CancelFunc
+	core            *core.Core
+	running         bool
+	logFile         *LogFile // полный лог сессии
+	stage           stageTracker
+	health          sessionHealth
+	session         uint64 // номер сессии; stale forwardEvents не должен трогать новую
+	xray            bool   // текущая сессия — сервер из подписки (Xray), без ядра VK TURN
 }
 
 func NewBridge(ctx context.Context, store *Store, onEvent func(string, ...any)) *Bridge {
-	return &Bridge{ctx: ctx, store: store, onEvent: onEvent}
+	return &Bridge{applyXray: wg.ApplyXray, ctx: ctx, store: store, onEvent: onEvent}
 }
 
 // Connect подключается к серверу.
 func (b *Bridge) Connect(params ConnectParams) error {
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
+
 	b.mu.Lock()
 	if b.running {
 		b.mu.Unlock()
@@ -96,58 +105,67 @@ func (b *Bridge) Connect(params ConnectParams) error {
 		c.Stop() // на всякий случай гасим контекст ядра
 		b.mu.Lock()
 		b.core = nil
-		if b.logFile != nil {
-			b.logFile.Close()
-			b.logFile = nil
-		}
+		file := b.logFile
+		b.logFile = nil
 		b.running = false
 		b.mu.Unlock()
+		file.Close()
 		return fmt.Errorf("core start: %w", err)
 	}
 
-	go b.forwardEvents(events, sessID)
-	go b.watchdog(sessID)
+	done := make(chan struct{})
+	b.sessionWorkDone = done
+	ctx, cancel := context.WithCancel(b.ctx)
+	b.cancelSession = cancel
+	eventsDone := make(chan struct{})
+	go func() {
+		defer close(eventsDone)
+		defer cancel()
+		b.forwardEvents(ctx, events, sessID)
+	}()
+	go func() {
+		defer close(done)
+		b.watchdog(sessID, eventsDone)
+		<-eventsDone
+	}()
 	return nil
 }
 
-const teardownWait = 20 * time.Second
-
-func (b *Bridge) Disconnect() {
-	b.mu.Lock()
-	c := b.core
-	b.mu.Unlock()
+func (b *Bridge) Disconnect() error {
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
 
 	b.mu.Lock()
+	c, xray, sess := b.core, b.xray, b.session
+	b.stopping = true
 	b.health = sessionHealth{}
 	b.mu.Unlock()
 	b.onEvent("degraded", false)
-
-	// Tear down WireGuard interface immediately — don't wait for core shutdown.
-	// Интерфейс ждёт этот вызов на «Отключение…», поэтому не дольше teardownWait:
-	// если снятие затянулось, оно доработает в фоне
-	done := make(chan struct{})
-	go func() {
-		wg.Teardown()
-		close(done)
-	}()
-	select {
-	case <-done:
-		log.Printf("[BRIDGE] WG интерфейс снят по запросу пользователя")
-	case <-time.After(teardownWait):
-		log.Printf("[BRIDGE] Снятие WG интерфейса идёт дольше %s — продолжаю в фоне", teardownWait)
+	if b.cancelSession != nil {
+		b.cancelSession()
+		b.cancelSession = nil
 	}
 
 	if c != nil {
 		c.Stop()
 	}
-
-	// У сессии Xray нет ядра, которое сообщило бы об остановке, — завершаем сами
-	b.mu.Lock()
-	xraySess, sess := b.xray, b.session
-	b.mu.Unlock()
-	if xraySess {
+	// Завершаем обработчики сессии до снятия туннеля: они ещё могут применять конфиг.
+	if b.sessionWorkDone != nil {
+		<-b.sessionWorkDone
+		b.sessionWorkDone = nil
+	}
+	cleanupErr := wg.Teardown()
+	if xray {
 		b.finishXray(sess)
 	}
+
+	b.mu.Lock()
+	b.stopping = false
+	b.mu.Unlock()
+	if cleanupErr != nil {
+		wg.setRuleStatus("Ошибка восстановления сети: " + cleanupErr.Error())
+	}
+	return cleanupErr
 }
 
 // ConnectXray подключает к серверу из подписки (ссылка vless://) через Xray.
@@ -157,6 +175,9 @@ func (b *Bridge) ConnectXray(link, name string) error {
 	if err != nil {
 		return err
 	}
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
+
 	b.mu.Lock()
 	if b.running {
 		b.mu.Unlock()
@@ -173,19 +194,28 @@ func (b *Bridge) ConnectXray(link, name string) error {
 
 	b.onEvent("state_changed", "connecting")
 	logf := func(msg string) {
-		b.onEvent("log", "INFO", "[XRAY] "+msg)
 		b.mu.Lock()
-		if b.logFile != nil {
-			b.logFile.Write("INFO", "[XRAY] "+msg)
+		if b.session != sessID || b.stopping {
+			b.mu.Unlock()
+			return
 		}
+		file := b.logFile
 		stage, moved := b.stage.feed(msg)
 		b.mu.Unlock()
+		b.onEvent("log", "INFO", "[XRAY] "+msg)
+		file.Write("INFO", "[XRAY] "+msg)
 		if moved {
 			b.onEvent("stage", stage)
 		}
 	}
 
+	ctx, cancel := context.WithCancel(b.ctx)
+	b.cancelSession = cancel
+	done := make(chan struct{})
+	b.sessionWorkDone = done
 	go func() {
+		defer close(done)
+		defer cancel()
 		logf(fmt.Sprintf("Сервер из подписки: %s (%s, %s)", name, v.param("type", "tcp"), v.param("security", "none")))
 		ips := resolveServerIPv4(v.Host)
 		if len(ips) == 0 {
@@ -193,34 +223,44 @@ func (b *Bridge) ConnectXray(link, name string) error {
 			b.finishXray(sessID)
 			return
 		}
-		err := wg.ApplyXray(link, ips, logf)
+		b.mu.Lock()
+		stopping := b.stopping
+		b.mu.Unlock()
+		if stopping {
+			return
+		}
+		err := b.applyXray(link, ips, logf)
 
 		b.mu.Lock()
-		stale := b.session != sessID || !b.running
+		stopping = b.stopping
 		b.mu.Unlock()
 		switch {
 		case err != nil:
 			b.onEvent("error", fmt.Sprintf("[XRAY] Ошибка: %v", err))
 			b.finishXray(sessID)
-		case stale:
-			// Отключили, пока шёл запрос пароля, — туннель уже никому не нужен
-			wg.Teardown()
+		case stopping:
+			// Disconnect снимет туннель после завершения этой горутины.
 		default:
 			logf("Туннель активен")
 			b.onEvent("state_changed", "connected")
-			go b.xrayStats(sessID)
+			b.xrayStats(ctx, sessID)
 		}
 	}()
 	return nil
 }
 
 // xrayStats раз в 3 с шлёт трафик сервера подписки в карточку скорости (как ядро VK TURN).
-func (b *Bridge) xrayStats(sessID uint64) {
+func (b *Bridge) xrayStats(ctx context.Context, sessID uint64) {
 	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
-	for range t.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 		b.mu.Lock()
-		current := b.session == sessID && b.xray && b.running
+		current := b.session == sessID && b.xray && b.running && !b.stopping
 		b.mu.Unlock()
 		if !current {
 			return
@@ -242,11 +282,10 @@ func (b *Bridge) finishXray(sessID uint64) {
 	}
 	b.running = false
 	b.xray = false
-	if b.logFile != nil {
-		b.logFile.Close()
-		b.logFile = nil
-	}
+	file := b.logFile
+	b.logFile = nil
 	b.mu.Unlock()
+	file.Close()
 	b.onEvent("state_changed", "disconnected")
 }
 
@@ -292,10 +331,15 @@ func (b *Bridge) SendCaptchaResult(token string) {
 // sessID — поколение сессии, на которую запущен этот горутин: если к моменту
 // его завершения уже начата новая сессия (быстрый Disconnect → Connect),
 // устаревший горутин не имеет права трогать состояние Bridge.
-func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
+func (b *Bridge) forwardEvents(parent context.Context, events <-chan core.Event, sessID uint64) {
+	ctx, cancel := context.WithCancel(parent)
+	var captcha sync.WaitGroup
+	defer func() { cancel(); captcha.Wait() }()
+	var routeSnapshotAt time.Time
+	var applyErr error
 	for ev := range events {
 		b.mu.Lock()
-		stale := b.session != sessID
+		stale := b.session != sessID || b.stopping
 		b.mu.Unlock()
 		if stale {
 			continue // только осушаем канал, без побочных эффектов
@@ -306,13 +350,17 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 			b.onEvent("state_changed", ev.Status)
 
 		case core.EventLog:
+			if time.Since(routeSnapshotAt) >= time.Minute &&
+				(strings.Contains(ev.Message, "network is unreachable") || strings.Contains(ev.Message, "can't assign requested address")) {
+				wg.logRoutesDarwin()
+				routeSnapshotAt = time.Now()
+			}
 			// Пишем ВСЁ в файл (включая отфильтрованное для UI)
 			b.mu.Lock()
-			if b.logFile != nil {
-				b.logFile.Write(ev.Level, ev.Message)
-			}
+			file := b.logFile
 			stage, moved := b.stage.feed(ev.Message)
 			b.mu.Unlock()
+			file.Write(ev.Level, ev.Message)
 			if moved {
 				b.onEvent("stage", stage)
 			}
@@ -337,19 +385,29 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 			case "wg_config":
 				b.onEvent("log", "INFO", "[WG] Применение конфига...")
 				wgLogf := func(msg string) {
-					b.onEvent("log", "INFO", "[WG] "+msg)
 					b.mu.Lock()
-					if b.logFile != nil {
-						b.logFile.Write("INFO", "[WG] "+msg)
+					if b.session != sessID || b.stopping {
+						b.mu.Unlock()
+						return
 					}
+					file := b.logFile
 					stage, moved := b.stage.feed(msg)
 					b.mu.Unlock()
+					b.onEvent("log", "INFO", "[WG] "+msg)
+					file.Write("INFO", "[WG] "+msg)
 					if moved {
 						b.onEvent("stage", stage)
 					}
 				}
 				if err := wg.Apply(ev.Data, ev.TurnIPs, wgLogf); err != nil {
+					applyErr = err
 					b.onEvent("error", fmt.Sprintf("[WG] Ошибка: %v", err))
+					b.mu.Lock()
+					c := b.core
+					b.mu.Unlock()
+					if c != nil {
+						c.Stop()
+					}
 				} else {
 					b.noteTunnelUp()
 					b.onEvent("log", "INFO", "[WG] Конфиг применён, туннель активен")
@@ -357,7 +415,8 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 				}
 			case "captcha_required":
 				b.onEvent("captcha_required", ev.Data)
-				go b.handleCaptchaRequest(ev.Data)
+				data := ev.Data
+				captcha.Go(func() { b.handleCaptchaRequest(ctx, sessID, data) })
 			case "ready":
 				b.onEvent("log", "INFO", "[ЯДРО] Туннель готов к работе")
 			default:
@@ -367,17 +426,29 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 	}
 
 	b.mu.Lock()
+	cleanup := b.session == sessID && !b.stopping
+	b.mu.Unlock()
+	if cleanup {
+		if err := wg.Teardown(); err != nil {
+			b.onEvent("error", err.Error())
+			wg.setRuleStatus("Ошибка восстановления сети: " + err.Error())
+		} else if applyErr != nil {
+			wg.setRuleStatus("Ошибка подключения: " + applyErr.Error())
+		}
+	}
+
+	b.mu.Lock()
 	current := b.session == sessID
 	curSession := b.session
+	var file *LogFile
 	if current {
 		b.running = false
 		b.core = nil
-		if b.logFile != nil {
-			b.logFile.Close()
-			b.logFile = nil
-		}
+		file = b.logFile
+		b.logFile = nil
 	}
 	b.mu.Unlock()
+	file.Close()
 
 	if !current {
 		log.Printf("[BRIDGE] Завершение устаревшей сессии проигнорировано (актуальна #%d)", curSession)
@@ -386,4 +457,11 @@ func (b *Bridge) forwardEvents(events <-chan core.Event, sessID uint64) {
 
 	b.onEvent("state_changed", "disconnected")
 	log.Printf("[BRIDGE] Ядро завершилось")
+}
+
+func (b *Bridge) flushLog() error {
+	b.mu.Lock()
+	file := b.logFile
+	b.mu.Unlock()
+	return file.Flush()
 }

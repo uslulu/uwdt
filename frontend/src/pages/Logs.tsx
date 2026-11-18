@@ -2,17 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { IconSearch, IconTrashX, IconCopy, IconCheck, IconDeviceFloppy } from '@tabler/icons-react';
 import { SaveLogs } from '../../wailsjs/go/backend/App';
 import { toastStore } from '../lib/stores/toastStore';
-import { logStore, type LogEntry, type LogLevel } from '../lib/stores/logStore';
+import { logStore, type LogEntry } from '../lib/stores/logStore';
+import '../components/ui.css';
 import './Logs.css';
 
 type Filter = 'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
-
-const LEVEL_COLOR: Record<LogLevel, string> = {
-  INFO:  'var(--text)',
-  WARN:  '#f59e0b',
-  ERROR: '#ef4444',
-  DEBUG: 'var(--text-3)',
-};
 
 export default function Logs() {
   const [filter, setFilter] = useState<Filter>('ALL');
@@ -98,7 +92,7 @@ export default function Logs() {
               {visible.map(e => (
                 <div key={e.id} className="log-row">
                   <span className="log-time">{e.time}</span>
-                  <span className="log-level" style={{ color: LEVEL_COLOR[e.level] }}>{e.level}</span>
+                  <span className={`log-level log-level--${e.level}`}>{e.level}</span>
                   <span className="log-msg">{e.message}</span>
                   {e.count > 1 && <span className="log-count">×{e.count}</span>}
                 </div>

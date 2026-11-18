@@ -1,6 +1,24 @@
 export namespace backend {
-	
-	export class ConnectParams {
+
+	export class AddressRoute {
+	    ip: string;
+	    rules: string[];
+	    route: string;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new AddressRoute(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ip = source["ip"];
+	        this.rules = source["rules"];
+	        this.route = source["route"];
+	        this.error = source["error"];
+	    }
+	}
+export class ConnectParams {
 	    peerAddr: string;
 	    password: string;
 	    hashes: string[];
@@ -29,6 +47,7 @@ export namespace backend {
 	    }
 	}
 	export class ExcludeEntry {
+	    source?: string;
 	    value: string;
 	    enabled: boolean;
 	
@@ -38,26 +57,9 @@ export namespace backend {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
 	        this.value = source["value"];
 	        this.enabled = source["enabled"];
-	    }
-	}
-	export class LogEntry {
-	    level: string;
-	    message: string;
-	    time: string;
-	    count: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new LogEntry(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.level = source["level"];
-	        this.message = source["message"];
-	        this.time = source["time"];
-	        this.count = source["count"];
 	    }
 	}
 	export class ProfileData {

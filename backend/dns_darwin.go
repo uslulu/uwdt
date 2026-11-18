@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
 )
 
 // dnsOverride — подменённый DNS сетевой службы (helper, root).
 type dnsOverride struct {
 	service string
+	applied []string
 	saved   []string // прежние серверы; пусто — DNS выдавал DHCP
 	active  bool
 }
@@ -68,23 +70,30 @@ func (d *dnsOverride) set(servers []string) error {
 	}
 	var saved []string
 	for _, f := range strings.Fields(out) {
-		if net.ParseIP(f) != nil && !isTunnelDNS(f) {
-			// tunnelDNSDefault в сохранённых — это остаток нашей же прошлой
-			// подмены, восстанавливать его при отключении нельзя
+		if net.ParseIP(f) != nil {
 			saved = append(saved, f)
 		}
 	}
 	if err := runCmdDarwin("networksetup", append([]string{"-setdnsservers", svc}, servers...)...); err != nil {
 		return err
 	}
+	d.applied = append([]string(nil), servers...)
 	d.service, d.saved, d.active = svc, saved, true
 	flushDNSCacheDarwin()
 	return nil
 }
 
-func (d *dnsOverride) restore() {
+func (d *dnsOverride) restore() error {
 	if !d.active {
-		return
+		return nil
+	}
+	current, err := cmdOutputDarwin("networksetup", "-getdnsservers", d.service)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(strings.Fields(current), d.applied) {
+		d.active = false
+		return nil
 	}
 	args := []string{"-setdnsservers", d.service}
 	if len(d.saved) == 0 {
@@ -92,9 +101,12 @@ func (d *dnsOverride) restore() {
 	} else {
 		args = append(args, d.saved...)
 	}
-	_ = runCmdDarwin("networksetup", args...)
+	if err := runCmdDarwin("networksetup", args...); err != nil {
+		return err
+	}
 	d.active = false
 	flushDNSCacheDarwin()
+	return nil
 }
 
 func flushDNSCacheDarwin() {

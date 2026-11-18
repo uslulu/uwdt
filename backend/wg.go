@@ -2,8 +2,10 @@ package backend
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -33,9 +35,20 @@ const wgIface = "pwdtt-wg"
 // PUBLIC API
 // ═══════════════════════════════════════════════════
 
+type windowsRoute struct {
+	prefix, gateway string
+	iface           uint64
+}
 type WG struct {
-	activeRoutes   []string
-	activeRoutesMu sync.Mutex
+	cancelLookup    context.CancelFunc
+	linuxOwned      bool
+	linuxGateway    string
+	ruleMu          sync.Mutex
+	ruleStatus      string
+	builtinWindows  map[string]bool
+	windowsRevision uint64
+	activeRoutes    []string
+	activeRoutesMu  sync.Mutex
 
 	// stateMu сериализует Apply/Teardown и защищает поля ниже:
 	// Apply вызывается из горутины forwardEvents, Teardown — из потока
@@ -43,24 +56,25 @@ type WG struct {
 	stateMu sync.Mutex
 
 	// Windows/macOS userspace-specific
-	activeDevice        *device.Device
-	activeTun           tun.Device
-	activeExcludeRoutes []string
-	physGW              string // physical gateway saved during apply for restore on teardown
+	activeDevice  *device.Device
+	activeTun     tun.Device
+	ownedWindows  map[windowsRoute]bool
+	windowsTunnel map[string]bool
+	physGW        string // physical gateway saved during apply for restore on teardown
 
 	// macOS-specific: соединение с привилегированным helper-процессом
 	helperConn *net.UnixConn
+	tunName    string
 
 	// Режим Xray: запущенный движок и fd интерфейса (закрываются при отключении).
-	// xrayMode (Windows): метрику физического шлюза не трогали, маршруты туннеля
-	// уходят вместе с адаптером Xray
 	activeXray    io.Closer
 	activeTunFile *os.File
-	xrayMode      bool
 
 	// Пользовательские исключения, применённые сейчас (CIDR), и остановка их обновления
 	activeUserExcludes []string
 	refreshStop        chan struct{}
+	darwinSession      uint64 // protected by stateMu
+	darwinRefresh      uint64 // protected by stateMu
 }
 
 type wgLogFunc func(msg string)
@@ -109,33 +123,43 @@ func (w *WG) XrayTraffic() (up, down int64, ok bool) {
 	return up, down, true
 }
 
-// CleanupStaleExcludeRoutes убирает exclude-маршруты, оставшиеся после краша
-// прошлого запуска (когда helper не успел сделать уборку). Вызывать при
-// старте приложения; на платформах без такой проблемы — no-op.
-func CleanupStaleExcludeRoutes(logf wgLogFunc) {
-	if logf == nil {
-		logf = func(msg string) { log.Printf("[WG] %s", msg) }
-	}
-	if runtime.GOOS == "darwin" {
-		cleanupStaleExcludeRoutesDarwin(logf)
-	}
-}
-
 // RefreshExcludes применяет текущий список исключений к поднятому туннелю
 // (после правки списка или для обновления адресов доменов).
-func (w *WG) RefreshExcludes(logf wgLogFunc) {
-	if logf == nil {
-		logf = func(msg string) { log.Printf("[WG] %s", msg) }
+func (w *WG) beginLookup() (context.Context, context.CancelFunc) {
+	if w.cancelLookup != nil {
+		w.cancelLookup()
 	}
-	switch runtime.GOOS {
-	case "darwin":
-		w.refreshExcludesDarwin(logf)
-	case "windows":
-		w.refreshExcludesWindows(logf)
-	default:
-		logf("Исключения сохранены — применятся при следующем подключении")
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancelLookup = cancel
+	return ctx, cancel
+}
+func (w *WG) setRuleStatus(status string) {
+	w.ruleMu.Lock()
+	defer w.ruleMu.Unlock()
+	w.ruleStatus = status
+}
+func (w *WG) refreshTask(logf wgLogFunc) func() {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if logf == nil {
+		logf = func(msg string) { log.Print(msg) }
+	}
+	session, stop := w.darwinSession, w.refreshStop
+	if w.helperConn != nil || stop != nil {
+		w.setRuleStatus("Применяется")
+	}
+	return func() {
+		switch runtime.GOOS {
+		case "darwin":
+			w.refreshExcludesDarwinSession(logf, session)
+		case "windows":
+			w.refreshWindowsSession(logf, stop)
+		case "linux":
+			w.setRuleStatus("При следующем подключении · Россия напрямую на Linux не поддерживается")
+		}
 	}
 }
+func (w *WG) RefreshExcludes(logf wgLogFunc) { w.refreshTask(logf)() }
 
 // SetTunnelRoutes снимает (false) или возвращает (true) маршруты туннеля, не
 // разрывая его: если каналы к серверу пропали, интернет идёт напрямую, а не в
@@ -147,7 +171,7 @@ func (w *WG) SetTunnelRoutes(on bool) error {
 	case "windows":
 		return w.setTunnelRoutesWindows(on)
 	}
-	return nil
+	return fmt.Errorf("изменение маршрутов активного туннеля не поддерживается на %s", runtime.GOOS)
 }
 
 func (w *WG) setTunnelRoutesWindows(on bool) error {
@@ -156,25 +180,35 @@ func (w *WG) setTunnelRoutesWindows(on bool) error {
 	if w.activeDevice == nil {
 		return fmt.Errorf("туннель не поднят")
 	}
+	op := "delete"
+	if on {
+		op = "add"
+	}
+	var errs []error
 	for _, cidr := range w.activeRoutes {
-		if on {
-			_ = runCmdWindows("netsh", "interface", "ip", "add", "route", cidr, wgIface)
+		if w.windowsTunnel[cidr] == on {
+			continue
+		}
+		if err := runCmdWindows("netsh", "interface", "ip", op, "route", cidr, wgIface); err != nil {
+			errs = append(errs, err)
 		} else {
-			_ = runCmdWindows("netsh", "interface", "ip", "delete", "route", cidr, wgIface)
+			w.windowsTunnel[cidr] = on
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+
 }
 
-func (w *WG) Teardown() {
+func (w *WG) Teardown() error {
 	switch runtime.GOOS {
 	case "linux":
-		w.teardownLinux()
+		return w.teardownLinux()
 	case "windows":
-		w.teardownWindows()
+		return w.teardownWindows()
 	case "darwin":
-		w.teardownDarwin()
+		return w.teardownDarwin()
 	}
+	return nil
 }
 
 // ═══════════════════════════════════════════════════
@@ -272,7 +306,7 @@ func parseWGConfig(conf string) (addr, mtu string, allowedIPs []string, wgConf s
 // LINUX — ip/wg команды через sudo
 // ═══════════════════════════════════════════════════
 
-func (w *WG) applyLinux(conf string, turnIPs []string, logf wgLogFunc) error {
+func (w *WG) applyLinux(conf string, turnIPs []string, logf wgLogFunc) (result error) {
 	w.teardownLinux()
 
 	addr, mtu, allowedIPs, wgConf := parseWGConfig(conf)
@@ -292,11 +326,18 @@ func (w *WG) applyLinux(conf string, turnIPs []string, logf wgLogFunc) error {
 		return err
 	}
 	tmp.Close()
-	os.Chmod(tmpName, 0o644)
 
 	if err := runCmdLinux("ip", "link", "add", wgIface, "type", "wireguard"); err != nil {
 		return fmt.Errorf("ip link add: %w", err)
 	}
+	w.activeRoutesMu.Lock()
+	w.linuxOwned = true
+	w.activeRoutesMu.Unlock()
+	defer func() {
+		if result != nil {
+			w.teardownLinux()
+		}
+	}()
 	if err := runCmdLinux("wg", "setconf", wgIface, tmpName); err != nil {
 		return fmt.Errorf("wg setconf: %w", err)
 	}
@@ -312,54 +353,103 @@ func (w *WG) applyLinux(conf string, turnIPs []string, logf wgLogFunc) error {
 	}
 
 	var routes []string
+	var failures []error
 	gw := defaultGatewayLinux()
-	if gw != "" {
-		for _, ip := range turnIPs {
-			if runCmdLinux("ip", "route", "add", ip+"/32", "via", gw) == nil {
-				routes = append(routes, ip+"/32")
-			}
-		}
-		for _, cidr := range append(append([]string{}, vkExcludeCIDRs...), currentUserExcludesFast(logf)...) {
-			if runCmdLinux("ip", "route", "add", cidr, "via", gw) == nil {
-				routes = append(routes, cidr)
-			}
-		}
-		for _, dns := range localDNSServers() {
-			if runCmdLinux("ip", "route", "add", dns+"/32", "via", gw) == nil {
-				routes = append(routes, dns+"/32")
-			}
+	if gw == "" {
+		return fmt.Errorf("нет физического шлюза")
+	}
+	w.linuxGateway = gw
+	user, missing := resolvedRules(context.Background(), ruleEntries(), logf, false)
+	var direct []string
+	for _, ip := range append(append([]string{}, turnIPs...), localDNSServers()...) {
+		if addr := net.ParseIP(ip); addr != nil && addr.To4() != nil {
+			direct = append(direct, addr.String()+"/32")
 		}
 	}
-	for _, cidr := range allowedIPs {
-		if runCmdLinux("ip", "route", "add", cidr, "dev", wgIface) == nil {
-			routes = append(routes, "dev:"+cidr)
+	direct = append(direct, vkExcludeCIDRs...)
+	direct = append(direct, user...)
+	var ruleFailures []string
+	seen := map[string]bool{}
+	for _, cidr := range direct {
+		if seen[cidr] {
+			continue
+		}
+		seen[cidr] = true
+		if err := runCmdLinux("ip", "route", "add", cidr, "via", gw); err != nil {
+			ruleFailures = append(ruleFailures, fmt.Sprintf("%s: %v", cidr, err))
+		} else {
+			routes = append(routes, cidr)
 		}
 	}
 
+	for _, p := range allowedIPs {
+		prefixes := []string{p}
+		if p == "0.0.0.0/0" {
+			prefixes = []string{"0.0.0.0/1", "128.0.0.0/1"}
+		}
+		for _, cidr := range prefixes {
+			if err := runCmdLinux("ip", "route", "add", cidr, "dev", wgIface); err != nil {
+				failures = append(failures, err)
+			} else {
+				routes = append(routes, "dev:"+cidr)
+			}
+		}
+	}
 	w.activeRoutesMu.Lock()
 	w.activeRoutes = routes
 	w.activeRoutesMu.Unlock()
+	if len(failures) > 0 {
+		return errors.Join(failures...)
+	}
+	if russiaDirectEnabled() {
+		ruleFailures = append(ruleFailures, "набор российских IPv4-сетей не поддерживается на Linux")
+	}
+	if len(missing) > 0 {
+		ruleFailures = append(ruleFailures, "нет IPv4 для "+strings.Join(missing, ", "))
+	}
+	if len(ruleFailures) > 0 {
+		w.setRuleStatus("Ошибка применения: " + strings.Join(ruleFailures, "\n"))
+	} else {
+		w.setRuleStatus("Действует · изменения при следующем подключении")
+	}
+
 	return nil
 }
 
-func (w *WG) teardownLinux() {
+func (w *WG) teardownLinux() error {
+	var failures []error
 	w.activeRoutesMu.Lock()
+	if !w.linuxOwned {
+		w.activeRoutesMu.Unlock()
+		return nil
+	}
+	w.linuxOwned = false
+	w.setRuleStatus("")
 	routes := w.activeRoutes
 	w.activeRoutes = nil
 	w.activeRoutesMu.Unlock()
 
 	for _, entry := range routes {
 		if strings.HasPrefix(entry, "dev:") {
-			_ = runCmdLinux("ip", "route", "del", strings.TrimPrefix(entry, "dev:"), "dev", wgIface)
+			if err := runCmdLinux("ip", "route", "del", strings.TrimPrefix(entry, "dev:"), "dev", wgIface); err != nil {
+				failures = append(failures, err)
+			}
 		} else {
-			_ = runCmdLinux("ip", "route", "del", entry)
+			if err := runCmdLinux("ip", "route", "del", entry, "via", w.linuxGateway); err != nil {
+				failures = append(failures, err)
+			}
 		}
 	}
-	_ = runCmdLinux("ip", "link", "del", wgIface)
+	if err := runCmdLinux("ip", "link", "del", wgIface); err != nil {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
 }
 
 func runCmdLinux(name string, args ...string) error {
-	cmd := exec.Command("sudo", append([]string{"-n", name}, args...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sudo", append([]string{"-n", name}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %v: %w — %s", name, args, err, strings.TrimSpace(string(out)))
@@ -411,13 +501,18 @@ var wintunDLLData []byte
 // InitWintun устанавливает wintun.dll (вызывается из main_windows.go).
 func InitWintun(dll []byte) {
 	wintunDLLData = dll
-	go clearTunnelDNSWindows() // правило DNS от аварийно оборванного сеанса
+	clearTunnelDNSWindows() // правило DNS от аварийно оборванного сеанса
 }
 
-func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
+func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) (result error) {
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
 	w.teardownWindowsLocked()
+	defer func() {
+		if result != nil {
+			w.teardownWindowsLocked()
+		}
+	}()
 
 	if err := extractWintun(); err != nil {
 		return fmt.Errorf("extract wintun.dll: %w", err)
@@ -464,25 +559,25 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 	if err := runCmdWindows("netsh", "interface", "ip", "set", "address",
 		"name="+wgIface, "source=static", addr, "none"); err != nil {
 		host, mask, _ := parseCIDR(addr)
-		if host != "" {
-			_ = runCmdWindows("netsh", "interface", "ip", "set", "address",
-				"name="+wgIface, "source=static", host, mask)
+		if host == "" {
+			return err
+		}
+		if err := runCmdWindows("netsh", "interface", "ip", "set", "address", "name="+wgIface, "source=static", host, mask); err != nil {
+			return err
 		}
 	}
 
 	// Set low metric on WG interface so it wins over physical default route
-	_ = runCmdWindows("netsh", "interface", "ip", "set", "interface",
-		"interface="+wgIface, "metric=1")
-
-	// Get physical gateway and raise its metric so WG takes priority
-	gw := defaultGatewayWindows()
-	logf(fmt.Sprintf("Default gateway: %s", gw))
-	if gw != "" {
-		// Save original metric for restore on teardown
-		w.physGW = gw
-		_ = runCmdWindows("route", "change", "0.0.0.0", "mask", "0.0.0.0", gw, "metric", "9999")
+	if err := runCmdWindows("netsh", "interface", "ip", "set", "interface", "interface="+wgIface, "metric=1"); err != nil {
+		return err
 	}
 
+	// Split default routes take precedence without modifying the physical metric.
+	gw := defaultGatewayWindows()
+	if gw == "" {
+		return fmt.Errorf("нет физического шлюза")
+	}
+	w.physGW = gw
 	// Exclude routes — VK IPs, DNS, etc go via physical gateway (bypass tunnel)
 	var excludes []string
 	if gw != "" {
@@ -490,51 +585,79 @@ func (w *WG) applyWindows(conf string, turnIPs []string, logf wgLogFunc) error {
 			excludes = append(excludes, ip+"/32")
 		}
 		excludes = append(excludes, vkExcludeCIDRs...)
-		for _, cidr := range excludes {
-			ip, mask, err := parseCIDR(cidr)
-			if err != nil {
-				continue
-			}
-			_ = runCmdWindows("route", "add", ip, "mask", mask, gw)
-		}
 		// Пользовательские исключения и «Россия» — из кэша, пачкой через API и ДО
 		// маршрутов туннеля, чтобы их трафик ни на миг не ушёл в туннель
-		user := currentAllExcludesFast(logf)
-		if _, err := bulkRoutes(true, gw, user); err != nil && len(user) > 0 {
-			logf("Исключения: " + err.Error())
+		w.builtinWindows = map[string]bool{}
+		for _, c := range excludes {
+			w.builtinWindows[c] = true
 		}
-		excludes = append(excludes, user...)
+		user := currentAllExcludesFast(logf)
+		if _, err := w.bulkRoutes(true, gw, excludes); err != nil {
+			w.teardownWindowsLocked()
+			return err
+		}
+		if _, err := w.bulkRoutes(true, gw, user); err != nil {
+			logf(err.Error())
+			user = nil
+		}
 		w.activeUserExcludes = user
 		w.refreshStop = make(chan struct{})
-		go w.excludeRefreshLoop(w.refreshStop, logf)
+		stop := w.refreshStop
+		go excludeRefreshLoop(stop, func() { w.refreshWindowsSession(logf, stop) })
 	}
-	w.activeExcludeRoutes = excludes
 
 	// Add AllowedIPs routes via the WG interface
+	w.windowsTunnel = map[string]bool{}
 	var tunnelRoutes []string
-	for _, cidr := range allowedIPs {
-		if err := runCmdWindows("netsh", "interface", "ip", "add", "route", cidr, wgIface); err != nil {
-			logf(fmt.Sprintf("netsh add route %s failed: %v", cidr, err))
+	var routed []string
+	for _, p := range allowedIPs {
+		if p == "0.0.0.0/0" {
+			routed = append(routed, "0.0.0.0/1", "128.0.0.0/1")
+		} else {
+			routed = append(routed, p)
 		}
+	}
+	for _, cidr := range routed {
+		if err := runCmdWindows("netsh", "interface", "ip", "add", "route", cidr, wgIface); err != nil {
+			w.activeRoutes = tunnelRoutes
+			w.teardownWindowsLocked()
+			return fmt.Errorf("маршрут %s: %w", cidr, err)
+		}
+		w.windowsTunnel[cidr] = true
 		tunnelRoutes = append(tunnelRoutes, cidr)
 	}
 	w.activeRoutes = tunnelRoutes
-	setTunnelDNSWindows(tunDev, parseWGDNS(conf), logf)
+	if err := setTunnelDNSWindows(tunDev, parseWGDNS(conf), logf); err != nil {
+		w.teardownWindowsLocked()
+		return err
+	}
 
 	logf(fmt.Sprintf("Туннель %s поднят, AllowedIPs: %v", wgIface, tunnelRoutes))
-	go w.RefreshExcludes(logf) // свежие домены, AS и «Россия» — пачкой через API, после подъёма туннеля
+	go w.refreshWindowsSession(logf, w.refreshStop) // свежие домены, AS и «Россия» — пачкой через API, после подъёма туннеля
 	return nil
 }
 
-func (w *WG) teardownWindows() {
+func (w *WG) teardownWindows() error {
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
-	w.teardownWindowsLocked()
+	return w.teardownWindowsLocked()
 }
 
-func (w *WG) teardownWindowsLocked() {
+func (w *WG) teardownWindowsLocked() error {
+	var failures []error
+	for key := range w.ownedWindows {
+		if err := w.releaseWindowsRoute(key); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	w.windowsRevision++
+	if w.cancelLookup != nil {
+		w.cancelLookup()
+		w.cancelLookup = nil
+	}
+	w.setRuleStatus("")
 	if w.activeDevice == nil && w.activeTun == nil && w.activeXray == nil {
-		return
+		return errors.Join(failures...)
 	}
 	// Каждый шаг — с длительностью в лог: по нему видно, на чём висит «Отключение…»
 	step := func(name string, f func()) {
@@ -545,7 +668,11 @@ func (w *WG) teardownWindowsLocked() {
 		}
 	}
 
-	step("DNS", clearTunnelDNSWindows)
+	step("DNS", func() {
+		if err := clearTunnelDNSWindows(); err != nil {
+			failures = append(failures, err)
+		}
+	})
 
 	if w.refreshStop != nil {
 		close(w.refreshStop)
@@ -553,36 +680,20 @@ func (w *WG) teardownWindowsLocked() {
 	}
 	w.activeUserExcludes = nil
 
-	if w.physGW != "" && len(w.activeExcludeRoutes) > 0 {
-		step(fmt.Sprintf("исключения (%d)", len(w.activeExcludeRoutes)), func() {
-			n, err := bulkRoutes(false, w.physGW, w.activeExcludeRoutes)
-			if err != nil {
-				log.Printf("[WG] Снятие исключений: %v", err)
-			} else if n < len(w.activeExcludeRoutes) {
-				log.Printf("[WG] Снято исключений: %d из %d (остальные уже убраны системой)", n, len(w.activeExcludeRoutes))
-			}
-		})
-	}
-	w.activeExcludeRoutes = nil
-
-	// Restore physical gateway metric (must happen BEFORE closing WG device)
-	if w.physGW != "" && !w.xrayMode {
-		step("метрика шлюза", func() {
-			_ = runCmdWindows("route", "change", "0.0.0.0", "mask", "0.0.0.0", w.physGW, "metric", "35")
-		})
-		w.physGW = ""
-	}
-
+	w.physGW = ""
 	// Delete tunnel routes explicitly to prevent Windows routing table corruption
 	step("маршруты туннеля", func() {
 		for _, cidr := range w.activeRoutes {
-			_ = runCmdWindows("netsh", "interface", "ip", "delete", "route", cidr, wgIface)
+			if w.windowsTunnel[cidr] {
+				if err := runCmdWindows("netsh", "interface", "ip", "delete", "route", cidr, wgIface); err != nil {
+					failures = append(failures, err)
+				}
+			}
 		}
 	})
 	w.activeRoutes = nil
 
 	w.physGW = ""
-	w.xrayMode = false
 
 	// Xray закрывает адаптер — маршруты туннеля исчезают вместе с ним
 	if w.activeXray != nil {
@@ -601,62 +712,64 @@ func (w *WG) teardownWindowsLocked() {
 		step("адаптер Wintun", func() { w.activeTun.Close() })
 		w.activeTun = nil
 	}
+	return errors.Join(failures...)
 }
 
 // refreshExcludesWindows применяет правку списка исключений к поднятому туннелю.
 // Приложение на Windows запущено с правами администратора — route работает напрямую.
-func (w *WG) refreshExcludesWindows(logf wgLogFunc) {
-	next := currentAllExcludes(logf)
+func (w *WG) refreshWindowsSession(logf wgLogFunc, expected chan struct{}) {
+	w.stateMu.Lock()
+	if w.refreshStop == nil || w.refreshStop != expected {
+		w.stateMu.Unlock()
+		return
+	}
+	session := w.refreshStop
+	w.windowsRevision++
+	version := w.windowsRevision
+	ctx, cancel := w.beginLookup()
+	defer cancel()
+	w.setRuleStatus("Применяется")
+	w.stateMu.Unlock()
+	next, unresolved := allExcludes(ctx, logf, false)
 
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
-	if (w.activeDevice == nil && w.activeXray == nil) || w.physGW == "" {
+	if session != w.refreshStop || version != w.windowsRevision {
 		return
 	}
-	user := map[string]bool{}
-	for _, c := range w.activeUserExcludes {
-		user[c] = true
-	}
-	builtin := map[string]bool{}
-	for _, c := range w.activeExcludeRoutes {
-		if !user[c] {
-			builtin[c] = true
-		}
-	}
-	add, del := diffCIDRs(w.activeUserExcludes, next)
-	changed := 0
-	var toDel, toAdd []string
-	for _, c := range del {
-		if !builtin[c] {
-			toDel = append(toDel, c)
-		}
-	}
-	for _, c := range add {
-		if !builtin[c] {
-			toAdd = append(toAdd, c)
-		}
-	}
-	if _, err := bulkRoutes(false, w.physGW, toDel); err != nil && len(toDel) > 0 {
-		logf("Снятие исключений: " + err.Error())
-	}
-	if _, err := bulkRoutes(true, w.physGW, toAdd); err != nil && len(toAdd) > 0 {
-		logf("Добавление исключений: " + err.Error())
+	toAdd, toDel := w.planWindowsUserRoutes(next)
+	_, removeErr := w.bulkRoutes(false, w.physGW, toDel)
+	added, addErr := w.bulkRoutes(true, w.physGW, toAdd)
+	if err := errors.Join(removeErr, addErr); err != nil {
+		w.setRuleStatus("Ошибка применения: " + err.Error())
 		return
 	}
-	changed = len(toDel) + len(toAdd)
-	if changed == 0 {
-		return
+	if len(unresolved) > 0 {
+		w.setRuleStatus("Нет IPv4-сетей для " + strings.Join(unresolved, ", "))
+	} else {
+		w.setRuleStatus("Действует")
 	}
-	// Держим полный список актуальным — по нему снимаются маршруты при отключении
-	var kept []string
-	for _, c := range w.activeExcludeRoutes {
-		if builtin[c] {
-			kept = append(kept, c)
-		}
-	}
-	w.activeExcludeRoutes = append(kept, next...)
 	w.activeUserExcludes = next
-	logf(fmt.Sprintf("Исключения обновлены: +%d −%d", len(add), len(del)))
+	if added+len(toDel) > 0 {
+		logf(fmt.Sprintf("Исключения обновлены: +%d −%d", added, len(toDel)))
+	}
+}
+
+// Reconcile against the successful creates, including a partially applied batch.
+func (w *WG) planWindowsUserRoutes(next []string) (add, remove []string) {
+	wanted := map[string]bool{}
+	for _, prefix := range next {
+		if !wanted[prefix] && !w.builtinWindows[prefix] {
+			add = append(add, prefix)
+		}
+		wanted[prefix] = true
+	}
+	for key := range w.ownedWindows {
+		if key.gateway == w.physGW && !wanted[key.prefix] && !w.builtinWindows[key.prefix] {
+			remove = append(remove, key.prefix)
+		}
+	}
+	return
 }
 
 func extractWintun() error {
@@ -734,7 +847,9 @@ func toHex(b64 string) string {
 }
 
 func runCmdWindows(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
